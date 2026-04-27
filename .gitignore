@@ -1,0 +1,24 @@
+.env
+.env.local
+.env.*.local
+
+# Datos persistentes (se crean al instalar)
+data/
+
+# Logs
+*.log
+logs/
+
+# Build artifacts
+api/dist/
+api/node_modules/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editores
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp

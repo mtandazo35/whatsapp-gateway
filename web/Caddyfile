@@ -1,0 +1,33 @@
+# Caddy obtiene SSL automatico de Let's Encrypt para {$DOMAIN}.
+# Requisitos: $DOMAIN apuntando a la IP del servidor + puertos 80/443 abiertos.
+
+{$DOMAIN} {
+    encode zstd gzip
+
+    # Tamano max de upload (25 MB)
+    request_body {
+        max_size 25MB
+    }
+
+    # API NestJS por reverse proxy
+    handle /api/* {
+        reverse_proxy api:3005 {
+            transport http {
+                read_timeout 600s
+                write_timeout 600s
+            }
+        }
+    }
+
+    # Frontend estatico
+    handle {
+        root * /srv
+        try_files {path} /index.html
+        file_server
+    }
+
+    log {
+        output stdout
+        format console
+    }
+}

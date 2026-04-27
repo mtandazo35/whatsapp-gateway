@@ -1,0 +1,37 @@
+body {
+  background: #f5f7fa;
+}
+
+.navbar-brand i {
+  font-size: 1.5rem;
+}
+
+.card {
+  border: 0;
+  border-radius: 12px;
+}
+
+.nav-tabs .nav-link.active {
+  font-weight: 600;
+}
+
+#qrWrap img {
+  max-width: 280px;
+  width: 100%;
+  height: auto;
+  border: 1px solid #eee;
+  padding: 8px;
+  background: white;
+  border-radius: 8px;
+}
+
+code {
+  background: #f0f0f0;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.85em;
+}
+
+#sessionBadge {
+  font-size: 0.85rem;
+}
