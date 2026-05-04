@@ -66,18 +66,19 @@ export class SendFileQueueProcessor {
       const sock = await this.validateSocket(sessionId);
       const recipientJid = this.getRecipientJid(number);
 
+      let sent: any
       if (fastMode) {
-        await sock.sendMessage(recipientJid, { text: message });
+        sent = await sock.sendMessage(recipientJid, { text: message });
       } else {
-        await this.sendMessageWithTypingSimulation(sock, recipientJid, message);
+        sent = await this.sendMessageWithTypingSimulation(sock, recipientJid, message);
       }
 
-      // ✅ Crear registro del mensaje
-      return await this.messageService.create({
-        message,
-        session: sessionId,
-        receptor: number,
-      });
+      // ✅ Crear registro del mensaje con id de WhatsApp para tracking
+      return await this.messageService.create(
+        { message, session: sessionId, receptor: number },
+        true,
+        { waMessageId: sent?.key?.id },
+      );
 
     } catch (error) {
       // Manejo de error
@@ -98,27 +99,15 @@ export class SendFileQueueProcessor {
     sock: any,
     recipientJid: string,
     message: string
-  ): Promise<void> {
-    // 1. Calcular tiempo de tipeo basado en longitud del mensaje
+  ): Promise<any> {
     const typingTime = this.calculateTypingTime(message);
-
-    // 2. Enviar estado "escribiendo..."
     await sock.sendPresenceUpdate('composing', recipientJid);
-
-    // 3. Esperar el tiempo de tipeo simulado
     await this.delay(typingTime);
-
-    // 4. Cambiar a estado "pausado" (dejó de escribir)
     await sock.sendPresenceUpdate('paused', recipientJid);
-
-    // 5. Pequeña pausa antes de enviar (más natural)
     await this.delay(this.getRandomDelay(500, 1500));
-
-    // 6. Enviar el mensaje
-    await sock.sendMessage(recipientJid, { text: message });
-
-    // 7. Volver a estado "available" (online)
+    const sent = await sock.sendMessage(recipientJid, { text: message });
     await sock.sendPresenceUpdate('available');
+    return sent;
   }
 
   @Process('sendMessageFile')
@@ -218,7 +207,7 @@ export class SendFileQueueProcessor {
       await this.delay(this.getRandomDelay(500, 1500));
 
       // ✅ 8. Enviar mensaje con retry
-      await this.sendWithRetry(sock, recipientJid, configMedia);
+      const sent = await this.sendWithRetry(sock, recipientJid, configMedia);
 
       // ✅ 9. Volver a estado disponible
       await sock.sendPresenceUpdate('available');
@@ -228,11 +217,11 @@ export class SendFileQueueProcessor {
         fs.unlinkSync(path);
       }
 
-      return await this.messageService.create({
-        message: originalname,
-        session,
-        receptor: number
-      });
+      return await this.messageService.create(
+        { message: originalname, session, receptor: number },
+        true,
+        { waMessageId: sent?.key?.id },
+      );
 
     } catch (error) {
       const session = await this.sessionRepository.findOneBy({ sessionId });
@@ -355,15 +344,15 @@ export class SendFileQueueProcessor {
       await this.delay(this.getRandomDelay(500, 1500));
 
       // ✅ Enviar con retry
-      await this.sendWithRetry(sock, recipientJid, configMedia);
+      const sent = await this.sendWithRetry(sock, recipientJid, configMedia);
 
       await sock.sendPresenceUpdate('available');
 
-      return await this.messageService.create({
-        message: mediaUrl,
-        session,
-        receptor: number
-      });
+      return await this.messageService.create(
+        { message: mediaUrl, session, receptor: number },
+        true,
+        { waMessageId: sent?.key?.id },
+      );
 
     } catch (error) {
       const session = await this.sessionRepository.findOneBy({ sessionId });

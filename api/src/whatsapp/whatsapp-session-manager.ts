@@ -11,6 +11,8 @@ import axios from 'axios'
 import { InjectRepository } from '@nestjs/typeorm'
 import { Session } from 'src/session/entities/session.entity'
 import { Repository } from 'typeorm'
+import { WebhookService } from './webhook.service'
+import { Message } from 'src/messages/entities/message.entity'
 
 // Tipos importados dinámicamente
 type WASocket = any
@@ -24,7 +26,11 @@ export class WhatsappSessionManager {
   private connectionStates = new Map<string, 'open' | 'close' | 'connecting' | 'not_started'>()
   private qrAttempts = new Map<string, number>()
   private sessionPromises = new Map<string, Promise<void>>()
+  private reconnectAttempts = new Map<string, number>()
+  private reconnectTimers = new Map<string, NodeJS.Timeout>()
   private readonly MAX_QR_RETRIES = 6
+  private readonly RECONNECT_BASE_DELAY_MS = 1_000
+  private readonly RECONNECT_MAX_DELAY_MS = 60_000
 
   // Referencias a funciones de Baileys cargadas dinámicamente
   private makeWASocket: any
@@ -36,7 +42,10 @@ export class WhatsappSessionManager {
 
   constructor(
     @InjectRepository(Session)
-    private readonly sessionRepository: Repository<Session>
+    private readonly sessionRepository: Repository<Session>,
+    @InjectRepository(Message)
+    private readonly messageRepository: Repository<Message>,
+    private readonly webhook: WebhookService,
   ) {
     // Cargar Baileys al inicializar el servicio
     this.loadBaileys()
@@ -176,14 +185,14 @@ export class WhatsappSessionManager {
 
           this.logger.warn(`[${sessionId}] ❌ Desconectado. Reconnect: ${shouldReconnect} - Reason: ${statusCode}`)
 
+          this.webhook.dispatch('session.close', { sessionId, statusCode, shouldReconnect })
+
           if (shouldReconnect) {
             this.connectionStates.set(sessionId, 'connecting')
-
-            await Promise.all([
-              this.sessionRepository.update({ sessionId }, { status: 'connecting' }),
-              this.startSession(sessionId)
-            ])
+            await this.sessionRepository.update({ sessionId }, { status: 'connecting' })
+            this.scheduleReconnect(sessionId)
           } else {
+            this.reconnectAttempts.delete(sessionId)
             await this.sessionRepository.update({ sessionId }, { status: 'close', numberSession: '' })
             deleteFilesInFolder(authPath)
           }
@@ -195,6 +204,7 @@ export class WhatsappSessionManager {
           this.qrCodes.set(sessionId, null)
           this.connectionStates.set(sessionId, 'open')
           this.qrAttempts.delete(sessionId)
+          this.reconnectAttempts.delete(sessionId)
 
           const meJid = sock?.authState?.creds?.me?.id
 
@@ -209,6 +219,7 @@ export class WhatsappSessionManager {
             }
 
             this.notifyWebsocket(`/api/enviar-notificacion/${sessionId}/open`)
+            this.webhook.dispatch('session.open', { sessionId, number })
             this.logger.log(`[${sessionId}] ✅ Conectado - Número: ${number}`)
           } else {
             this.logger.warn(`[${sessionId}] ⚠️ Conectado pero no se pudo obtener el número`)
@@ -222,10 +233,75 @@ export class WhatsappSessionManager {
     sock.ev.on('creds.update', saveCreds)
 
     sock.ev.on('messages.upsert', (upsert: any) =>
-      handleMessagesUpsert(sock, upsert, sessionId)
+      handleMessagesUpsert(sock, upsert, sessionId, this.webhook)
+    )
+
+    sock.ev.on('messages.update', (updates: any[]) =>
+      this.handleMessagesUpdate(sessionId, updates),
     )
 
     this.sessions.set(sessionId, sock)
+  }
+
+  private scheduleReconnect(sessionId: string) {
+    const existing = this.reconnectTimers.get(sessionId)
+    if (existing) clearTimeout(existing)
+
+    const attempt = (this.reconnectAttempts.get(sessionId) ?? 0) + 1
+    this.reconnectAttempts.set(sessionId, attempt)
+
+    const delay = Math.min(
+      this.RECONNECT_MAX_DELAY_MS,
+      this.RECONNECT_BASE_DELAY_MS * Math.pow(2, attempt - 1),
+    )
+
+    this.logger.log(`[${sessionId}] 🔁 Reintento #${attempt} en ${delay}ms`)
+
+    const timer = setTimeout(() => {
+      this.reconnectTimers.delete(sessionId)
+      this.startSession(sessionId).catch(err =>
+        this.logger.warn(`[${sessionId}] reconnect falló: ${err?.message}`),
+      )
+    }, delay)
+    this.reconnectTimers.set(sessionId, timer)
+  }
+
+  private async handleMessagesUpdate(sessionId: string, updates: any[]) {
+    if (!updates?.length) return
+
+    for (const u of updates) {
+      const waId = u?.key?.id
+      const status = u?.update?.status
+      if (!waId || status === undefined) continue
+
+      const statusName = this.mapStatus(status)
+
+      this.webhook.dispatch('message.update', {
+        sessionId,
+        messageId: waId,
+        remoteJid: u.key?.remoteJid,
+        status: statusName,
+      })
+
+      try {
+        await this.messageRepository.update({ waMessageId: waId }, { status: statusName })
+      } catch (err: any) {
+        this.logger.warn(`[${sessionId}] no se pudo actualizar status de ${waId}: ${err?.message}`)
+      }
+    }
+  }
+
+  private mapStatus(code: number): string {
+    // Baileys WAMessageStatus: 0=ERROR, 1=PENDING, 2=SERVER_ACK, 3=DELIVERY_ACK, 4=READ, 5=PLAYED
+    const map: Record<number, string> = {
+      0: 'error',
+      1: 'pending',
+      2: 'sent',
+      3: 'delivered',
+      4: 'read',
+      5: 'played',
+    }
+    return map[code] ?? `unknown(${code})`
   }
 
   async getQR(sessionId: string): Promise<string | null> {

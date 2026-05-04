@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Delete, Get, Param, Post, Query, UploadedFiles, UseInterceptors } from '@nestjs/common';
+import { BadRequestException, Body, Controller, DefaultValuePipe, Delete, Get, Headers, Param, ParseBoolPipe, Post, Query, UploadedFiles, UseInterceptors } from '@nestjs/common';
 import { WhatsappService } from './whatsapp.service';
 import { SendMessageDto } from './dto/send-message.dto';
 import { FileFieldsInterceptor } from '@nestjs/platform-express';
@@ -8,12 +8,14 @@ import { fileNamer } from './helpers/fileNamer.helper';
 import { SendMediaUrlDto } from './dto/send-media-url.dto';
 import { SendMediaDto } from './dto/send-media.dto';
 import { SessionService } from 'src/session/session.service';
+import { IdempotencyService } from './idempotency.service';
 
 @Controller('whatsapp')
 export class WhatsappController {
   constructor(
     private readonly whatsappService: WhatsappService,
-    private readonly sessionService: SessionService
+    private readonly sessionService: SessionService,
+    private readonly idempotency: IdempotencyService,
   ) {}
 
   @Get('/qr/:sessionId')
@@ -53,11 +55,9 @@ export class WhatsappController {
   @Post('/send')
   async sendMessage(
     @Body() data: SendMessageDto,
-    @Query('fastMode') fastMode?: boolean
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
+    @Query('fastMode', new DefaultValuePipe(false), ParseBoolPipe) fastMode: boolean,
   ) {
-
-    const useFastMode = fastMode !== undefined ? fastMode : false;
-
     let { sessionId, number, message } = data;
 
     const session = await this.sessionService.findSession(sessionId);
@@ -74,13 +74,31 @@ export class WhatsappController {
       throw new BadRequestException(`Número inválido: ${data.number}`);
     }
 
-    const result = await this.whatsappService.sendMessage(sessionId, number, message, useFastMode)
-
-    if (!result) {
-      throw new BadRequestException(`No se pudo enviar mensaje. ¿La sesión está activa?`)
+    const idemKey = idempotencyKey?.trim()
+    if (idemKey) {
+      const cached = await this.idempotency.checkAndReserve(`${sessionId}:${idemKey}`)
+      if (cached !== null) {
+        if (cached === 'pending') {
+          return { status: 'duplicate', message: 'Petición ya en proceso con la misma Idempotency-Key' }
+        }
+        try { return JSON.parse(cached) } catch { /* fall through */ }
+      }
     }
 
-    return { status: 'ok', message: `Mensaje enviado a ${number}` }
+    try {
+      const result = await this.whatsappService.sendMessage(sessionId, number, message, fastMode)
+
+      if (!result) {
+        throw new BadRequestException(`No se pudo enviar mensaje. ¿La sesión está activa?`)
+      }
+
+      const response = { status: 'ok', message: `Mensaje enviado a ${number}` }
+      if (idemKey) await this.idempotency.store(`${sessionId}:${idemKey}`, response)
+      return response
+    } catch (err) {
+      if (idemKey) await this.idempotency.release(`${sessionId}:${idemKey}`)
+      throw err
+    }
   }
 
   @Post('/send-media/url')

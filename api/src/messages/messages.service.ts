@@ -13,8 +13,18 @@ export class MessagesService {
     private readonly messageRepository: Repository<Message>
   ){}
 
-  async create(createMessageDto: CreateMessageDto, sent = true) {
-    const message = this.messageRepository.create({ ...createMessageDto, sent })
+  async create(
+    createMessageDto: CreateMessageDto,
+    sent = true,
+    extras: { waMessageId?: string; status?: string } = {},
+  ) {
+    const status = extras.status ?? (sent ? 'sent' : 'failed')
+    const message = this.messageRepository.create({
+      ...createMessageDto,
+      sent,
+      waMessageId: extras.waMessageId,
+      status,
+    })
     return await this.messageRepository.save(message);
   }
 

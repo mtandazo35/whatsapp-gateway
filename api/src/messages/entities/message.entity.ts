@@ -20,6 +20,12 @@ export class Message {
   @Column({ type: 'boolean', default: true })
   sent: boolean;
 
+  @Column({ type: 'varchar', length: 128, nullable: true, name: 'wa_message_id' })
+  waMessageId: string;
+
+  @Column({ type: 'varchar', length: 32, default: 'pending' })
+  status: string;
+
   @CreateDateColumn()
   created_at: Date;
 
