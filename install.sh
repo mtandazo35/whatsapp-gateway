@@ -111,12 +111,21 @@ DOMAIN=${DOMAIN}
 POSTGRES_USER=whatsapp
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
 POSTGRES_DB=whatsapp
+# Solo en primer boot. Cambia a false despues para no perder columnas.
 DB_SYNC=true
 
 JWT_SECRET=${JWT_SECRET}
+
+# Webhook saliente opcional (mensajes entrantes + estado de sesion/mensajes)
+WEBHOOK_URL=
+WEBHOOK_SECRET=
+
+# Retencion de respaldos generados por scripts/backup.sh
+BACKUP_RETENTION_DAYS=30
 EOF
   chmod 600 .env
   log ".env creado (chmod 600). NO commitear este archivo."
+  log "Para activar webhook: edita WEBHOOK_URL en .env y reinicia el api."
 else
   # Asegurar que DOMAIN esta actualizado
   if grep -q "^DOMAIN=" .env; then
@@ -149,13 +158,13 @@ hdr "Construyendo y levantando contenedores"
 docker compose -p "$COMPOSE_PROJECT" up -d --build
 
 # =============== 7. HEALTHCHECK ===============
-hdr "Esperando a que la API responda"
+hdr "Esperando a que la API responda (/api/health)"
 ATTEMPTS=30
 for i in $(seq 1 $ATTEMPTS); do
   CODE="$(docker compose -p "$COMPOSE_PROJECT" exec -T api curl -s -o /dev/null -w "%{http_code}" \
-    http://127.0.0.1:3005/api/whatsapp/status-sessions 2>/dev/null || echo "000")"
-  if [ "$CODE" = "200" ] || [ "$CODE" = "404" ]; then
-    log "API respondiendo (HTTP $CODE)"
+    http://127.0.0.1:3005/api/health 2>/dev/null || echo "000")"
+  if [ "$CODE" = "200" ]; then
+    log "API healthy (HTTP $CODE)"
     break
   fi
   sleep 2
@@ -182,17 +191,39 @@ done
 
 [ "$HTTPS_OK" = "1" ] || warn "HTTPS aun no responde. Revisa que el dominio resuelve y los puertos 80/443 estan abiertos."
 
-# =============== 8. RESUMEN ===============
+# =============== 8. BACKUP CRON (opcional) ===============
+hdr "Backup automatico"
+CRON_FILE="/etc/cron.d/whatsapp-gateway-backup"
+if [ -f "$CRON_FILE" ]; then
+  log "Cron de backup ya instalado en $CRON_FILE"
+else
+  read -rp "Instalar cron diario de backup (3:00 AM)? [y/N] " ans
+  if [[ "${ans,,}" == "y" ]]; then
+    cat > "$CRON_FILE" <<EOF
+# Respaldo diario de whatsapp-gateway (Postgres + sesiones Baileys)
+0 3 * * * root cd ${SCRIPT_DIR} && bash scripts/backup.sh >> /var/log/wa-gateway-backup.log 2>&1
+EOF
+    chmod 644 "$CRON_FILE"
+    log "Cron instalado en $CRON_FILE"
+  else
+    log "Saltado. Para correr a mano: bash scripts/backup.sh"
+  fi
+fi
+
+# =============== 9. RESUMEN ===============
 echo
 log "=========================================="
 log "  Instalacion completa"
 log "=========================================="
 log "  Frontend:        https://${DOMAIN}/"
 log "  API:             https://${DOMAIN}/api"
+log "  Health:          https://${DOMAIN}/api/health"
 log "  Compose project: ${COMPOSE_PROJECT}"
 echo
 log "  Logs API:        docker compose -p ${COMPOSE_PROJECT} logs -f api"
 log "  Logs web/Caddy:  docker compose -p ${COMPOSE_PROJECT} logs -f web"
 log "  Reiniciar:       docker compose -p ${COMPOSE_PROJECT} restart"
 log "  Bajar todo:      docker compose -p ${COMPOSE_PROJECT} down"
+log "  Backup manual:   bash scripts/backup.sh"
+log "  Webhook:         editar WEBHOOK_URL en .env y reiniciar"
 log "=========================================="
