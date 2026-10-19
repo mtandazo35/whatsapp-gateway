@@ -21,7 +21,7 @@ autenticación por token para enviar mensajes y archivos desde tus sistemas.
 ## Stack
 
 - **API**: NestJS 10 + Baileys ≥ 7.0.0-rc.12, colas con Bull sobre Redis.
-- **Frontend**: HTML + Bootstrap 5 + JS vanilla, sin build step.
+- **Frontend**: HTML + Bootstrap 5 + JS vanilla, sin build step. Incluye pestaña de administración.
 - **Datos**: PostgreSQL 16 (usuarios, sesiones, historial) y Redis 7 (colas, idempotencia).
 - **Borde**: Caddy 2 con TLS automático, CSP y cabeceras de seguridad.
 - **Empaquetado**: Docker Compose; solo Caddy publica puertos (80/443).
@@ -115,7 +115,10 @@ Todas con `Authorization: Bearer` salvo las marcadas 🔓. Detalle, cuerpos y er
 | POST | `/whatsapp/send-media/file` | Archivos multipart (10 × 25 MB) → 202 |
 | GET | `/whatsapp/check-number` | ¿El número tiene WhatsApp? |
 | DELETE | `/whatsapp/session/:sessionId` | Logout y borrado de credenciales |
-| GET | `/messages`, `/messages/:id` | Historial y estado de un envío |
+| POST | `/whatsapp/messages/:id/retry` | Reintenta un envío fallido (texto o URL) |
+| GET    | `/messages`, `/messages/:id` | Historial y estado de un envío (`?status=`) |
+| GET (admin) | `/status` | Sesiones, colas, mensajes 24 h, webhooks, alertas |
+| GET / POST (admin) | `/webhooks/events`, `/webhooks/events/:id/replay` | Eventos salientes y reenvío |
 | GET 🔓 | `/health`, `/ready` | Liveness y readiness (BD + Redis) |
 
 ## Seguridad en dos párrafos
@@ -133,9 +136,12 @@ escrito en [docs/SEGURIDAD.md](docs/SEGURIDAD.md#lo-que-este-modelo-no-cubre).
 
 ## Webhook saliente
 
-Define `WEBHOOK_URL` (y opcionalmente `WEBHOOK_SECRET` para firma HMAC-SHA256 en
-`X-Signature`) y recibirás `POST` por cada mensaje entrante, cambio de estado de un envío y
-apertura o cierre de sesión. Formato y verificación en [docs/API.md](docs/API.md#webhook-saliente).
+Define `WEBHOOK_URL` (https; `WEBHOOK_ALLOW_HTTP=true` si el receptor está en tu red) y
+opcionalmente `WEBHOOK_SECRET` para firma HMAC-SHA256 en `X-Signature`. Recibirás `POST` por
+cada mensaje entrante, cambio de estado de un envío y apertura o cierre de sesión. Los eventos
+se guardan antes de enviarse, se reintentan hasta 10 veces y los fallidos se reenvían desde
+`/webhooks/events` o la pestaña Administración. Formato y verificación en
+[docs/API.md](docs/API.md#webhook-saliente).
 
 ## Variables de entorno (`.env`)
 
@@ -150,7 +156,10 @@ apertura o cierre de sesión. Formato y verificación en [docs/API.md](docs/API.
 | `JWT_EXPIRES_IN` | Vida del token (`8h`). |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Administrador inicial; solo con la tabla de usuarios vacía. |
 | `CORS_ORIGIN` | Orígenes permitidos, separados por coma. Vacío = CORS desactivado. |
-| `WEBHOOK_URL` / `WEBHOOK_SECRET` | Webhook saliente opcional. |
+| `WEBHOOK_URL` / `WEBHOOK_SECRET` | Webhook saliente opcional (https). |
+| `WEBHOOK_ALLOW_HTTP` | `true` para permitir un receptor `http://` en tu red. |
+| `BACKUP_ENCRYPT_PASSPHRASE` | Cifra los respaldos (el instalador la genera). Guárdala fuera del servidor. |
+| `BACKUP_REMOTE_DEST` / `BACKUP_SSH_KEY` | Destino rsync/ssh para copiar el respaldo fuera del host. |
 | `BACKUP_RETENTION_DAYS` | Días que conserva `scripts/backup.sh` (30). |
 
 Plantilla comentada en [`.env.example`](.env.example).
@@ -160,7 +169,8 @@ Plantilla comentada en [`.env.example`](.env.example).
 ```bash
 docker compose -p whatsapp-gateway logs -f api        # qué pasa
 docker compose -p whatsapp-gateway restart api        # reinicio suave
-bash scripts/backup.sh                                # respaldo BD + credenciales
+bash scripts/backup.sh                                # respaldo BD + credenciales + Redis (cifrado)
+bash scripts/restore.sh data/backups/<fecha>          # restauración verificada
 git pull && sudo bash install.sh                      # actualizar
 ```
 
@@ -194,17 +204,19 @@ scripts/         backup.sh
 
 ## Estado y pendientes
 
-La auditoría del 2026-10-19 (20 hallazgos) tiene cerrado el bloque P0: autenticación y roles,
+La auditoría del 2026-10-19 (20 hallazgos) está cerrada en P0 y P1: autenticación y roles,
 Baileys parcheado, registro fiel de envíos, respuesta `queued`, aislamiento de subidas,
-anti-SSRF, XSS y CSP. Del P1 están hechos migraciones y rate limiting. Sigue pendiente, por orden:
+anti-SSRF, XSS y CSP, migraciones, rate limiting, webhooks persistentes, idempotencia con
+hash, cierre de sesión desde el CRUD, respaldos cifrados con restauración y CI. Queda:
 
-1. Webhooks con cola persistente (hoy los reintentos viven en memoria).
-2. Idempotencia con hash del cuerpo y para multimedia; barrido de mensajes `queued` huérfanos.
-3. Que desactivar o borrar una sesión desde el CRUD cierre también el socket.
-4. Respaldos fuera del host, cifrados y con restauración ensayada.
-5. CI con build, pruebas y `npm audit`; `npm ci` en el Dockerfile; TypeScript estricto.
+1. **Multi-worker**: un proceso lleva todas las sesiones. Escalar exige asignar cada sesión
+   a un proceso y enrutar sus jobs (bloqueo distribuido en Redis).
+2. TypeScript estricto (`strictNullChecks`) por módulos.
+3. Idempotencia en la subida multipart (hoy solo texto y URL).
+4. Métricas Prometheus (hoy `/status` en JSON).
+5. Decidir si la mensajería crítica pasa a la Cloud API oficial.
 
-Hecho en 0.2.0: migraciones versionadas y rate limiting (ver `CHANGELOG.md`).
+Hecho hasta 0.3.0: todo el P0 y P1 de la auditoría y la mayor parte del P2 (ver `CHANGELOG.md`).
 
 ## Licencia
 

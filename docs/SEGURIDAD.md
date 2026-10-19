@@ -128,10 +128,36 @@ La API confía en **un** salto de proxy (`trust proxy = 1`) para tomar la IP de
 `X-Forwarded-For`; es Caddy, en la misma red de compose. Si pones otro proxy delante
 (Cloudflare), sube `TRUST_PROXY_HOPS` o el límite se aplicará a la IP del proxy.
 
+## Webhook saliente
+
+- `https://` obligatorio; `http://` solo con `WEBHOOK_ALLOW_HTTP=true` (receptor en la red
+  interna). Una URL inválida desactiva el webhook con error en el log, no lo deja a medias.
+- Firma HMAC-SHA256 del cuerpo exacto en `X-Signature` cuando hay `WEBHOOK_SECRET`. El
+  cuerpo lleva `eventId` y `timestamp`: el receptor debe rechazar eventos repetidos
+  (idempotencia por `eventId`) y, si quiere protección contra replay externo, descartar
+  `timestamp` demasiado antiguos.
+- Los eventos se persisten en Postgres antes de salir: un atacante que tumbe el receptor no
+  provoca pérdida, solo retraso.
+
+## Auditoría
+
+- Cada mensaje guarda `requested_by` (usuario que lo pidió) además de la sesión.
+- La línea de acceso del log lleva usuario, IP, código y `X-Request-Id`. Los logs no
+  incluyen cuerpos ni tokens.
+
+## Respaldos
+
+- `scripts/backup.sh` cifra con AES-256-CBC (PBKDF2, 200 000 iteraciones) si
+  `BACKUP_ENCRYPT_PASSPHRASE` está definida; el instalador la genera. Sin la clave los
+  archivos `.enc` no sirven: guárdala fuera del servidor.
+- `MANIFEST.sha256` permite detectar un respaldo alterado; `restore.sh` lo verifica antes de
+  tocar nada y guarda el estado previo.
+- `BACKUP_REMOTE_DEST` saca la copia del host por rsync/ssh. Un respaldo que vive solo en
+  el servidor desaparece con él.
+
 ## Lo que este modelo no cubre
 
 - **Rotación de `JWT_SECRET`** invalida todos los tokens; no hay versión de token por usuario.
-- **Auditoría de acciones** (quién envió qué): el historial guarda la sesión, no el usuario
-  que pidió el envío.
+- **Idempotencia en la subida multipart**: solo texto y URL la tienen.
 - **Bloqueo del número por WhatsApp**: es un cliente no oficial. Las simulaciones de escritura
   y la caché de perfil reducen la señal, no la eliminan.

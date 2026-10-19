@@ -32,12 +32,19 @@ cualquier carácter no numérico y exige entre 10 y 15 dígitos.
 | 401 | Sin token, token caducado, usuario borrado o desactivado | `{ "statusCode": 401, "message": "Token no enviado" }` |
 | 403 | Rol insuficiente o sesión de otro usuario | `{ "statusCode": 403, "message": "No tienes acceso a esta sesión" }` |
 | 404 | Recurso inexistente (o mensaje de otro usuario) | `{ "statusCode": 404, "message": "..." }` |
+| 409 | `Idempotency-Key` reutilizada con otro cuerpo | `{ "statusCode": 409, "message": "Esta Idempotency-Key ya se usó con otro cuerpo..." }` |
 | 413 | Cuerpo mayor de 25 MB (lo corta Caddy) | texto plano |
 | 429 | Rate limit por IP: 10 logins/min, 120 envíos/min, 600 peticiones/min en total | `{ "statusCode": 429, "message": "Demasiadas peticiones, espera un momento" }` + `Retry-After` |
 | 503 | `/ready` con BD o Redis caídos | `{ "status": "degraded", "checks": { "db": "ok", "redis": "fail" } }` |
 
 Los errores de validación (`ValidationPipe` con `whitelist` y `forbidNonWhitelisted`)
 devuelven `message` como lista: un campo desconocido en el cuerpo también es 400.
+
+### Request-Id
+
+Toda respuesta lleva `X-Request-Id`. Si el cliente manda uno (hasta 64 caracteres) se
+respeta; si no, la API lo genera. La línea de acceso del log lo incluye (`rid=`), así que
+un soporte puede localizar una petición concreta con ese valor.
 
 ### Paginación
 
@@ -161,13 +168,13 @@ Por UUID o `sessionId`. 403 si no es tuya y no eres admin.
 
 ### `PATCH /session/:id` (UUID)
 
-`{ "nameSession": "...", "isActive": false }`. Con `isActive: false` la API rechaza nuevos
-envíos (400 "se encuentra inactiva") y la sesión no se levanta al reiniciar el servicio.
-**No cierra el socket en caliente**: para eso usa `DELETE /whatsapp/session/:sessionId`.
+`{ "nameSession": "...", "isActive": false }`. Con `isActive: false` la sesión se cierra en
+caliente (logout, credenciales borradas, jobs cancelados), la API rechaza nuevos envíos
+(400 "se encuentra inactiva") y no se levanta al reiniciar el servicio.
 
 ### `DELETE /session/:id`, `PUT /session/restore/:id` (UUID)
 
-Borrado lógico. Igual que arriba: no hace logout del socket.
+Borrado lógico. También cierra el socket y cancela los envíos pendientes.
 
 ---
 
@@ -235,8 +242,13 @@ Respuesta **202**:
 
 Requisitos: sesión tuya, activa y **conectada** (`open`); si no, 400 y nada se encola.
 
-Con la misma `Idempotency-Key` dentro de 24 h se devuelve la respuesta original sin reencolar.
-Si la primera petición aún está en curso: `{ "status": "duplicate", "message": "Petición ya en proceso..." }`.
+Con la misma `Idempotency-Key` (máx. 128 caracteres) dentro de 24 h se devuelve la
+respuesta original sin reencolar. Si la primera petición aún está en curso:
+`{ "status": "duplicate", ... }`. Si la clave se reutiliza con **otro cuerpo** (número,
+texto o `fastMode` distintos) la API responde **409**: cada envío distinto necesita su clave.
+Una reserva que quedó a medias (caída entre aceptar y responder) caduca a los 2 minutos.
+La clave va ligada a la sesión. También vale en `/whatsapp/send-media/url`; la subida
+multipart no la soporta.
 
 ### `POST /whatsapp/send-media/url`
 
@@ -275,6 +287,12 @@ curl -s -X POST https://<dominio>/api/whatsapp/send-media/file \
 Las imágenes de más de 500 KB se recomprimen a JPEG. El nombre que ve el destinatario es el
 original; en disco se guarda con UUID y se borra tras el envío.
 
+### `POST /whatsapp/messages/:id/retry`
+
+Reintenta un mensaje en estado `failed` creando **un mensaje nuevo** (el fallido se queda
+en el historial con su `lastError`). Vale para `kind` `text` y `media_url`; un `file` ya no
+existe en disco (400 "vuelve a subirlo"). Responde 202 con `messageId`, `jobId` y `retryOf`.
+
 ### `GET /whatsapp/check-number?sessionId=...&number=...`
 
 ```json
@@ -283,11 +301,13 @@ original; en disco se guarda con UUID y se borra tras el envío.
 
 ### `DELETE /whatsapp/session/:sessionId`
 
-Cierra la sesión en WhatsApp (logout), cancela reconexiones pendientes y borra las
-credenciales. Para volver a usarla hay que escanear QR de nuevo.
+Cierra la sesión en WhatsApp (logout), cancela reconexiones pendientes, borra las
+credenciales, retira de la cola los envíos pendientes de esa sesión y los marca `failed`.
+Para volver a usarla hay que escanear QR de nuevo. `PATCH /session/:id` con
+`isActive:false` y `DELETE /session/:id` hacen lo mismo.
 
 ```json
-{ "status": "ok", "sessionId": "3fa85f64a1b2", "result": { "status": "closed" } }
+{ "status": "ok", "sessionId": "3fa85f64a1b2", "result": { "status": "closed", "cancelled": 0 } }
 ```
 
 ---
@@ -296,8 +316,10 @@ credenciales. Para volver a usarla hay que escanear QR de nuevo.
 
 ### `GET /messages`
 
-Paginado. Filtros: `session` (UUID o `sessionId`), `filter` (texto del mensaje o nombre de
-la sesión). Un usuario normal solo ve mensajes de sus sesiones.
+Paginado. Filtros: `session` (UUID o `sessionId`), `status` (`queued`, `sent`, `delivered`,
+`read`, `played`, `failed`, `error`) y `filter` (texto, receptor o nombre de la sesión). Un
+usuario normal solo ve mensajes de sus sesiones. Cada fila trae `kind` (`text`, `media_url`,
+`file`), `caption`, `fastMode`, `lastError` y `requestedBy` (`id`, `email` de quien lo pidió).
 
 ```json
 {
@@ -332,15 +354,39 @@ Estado de un envío. Es la ruta que debe consultar una integración tras el 202.
 | `failed` | false | Agotados los intentos; `lastError` explica |
 | `error` | false | WhatsApp devolvió error para ese mensaje |
 
-Los estados solo avanzan. Un envío queda `queued` para siempre solo si el servicio se reinició
-con el job en Redis sin procesar y Bull no lo retomó: trátalo como desconocido pasados unos
-minutos.
+Los estados solo avanzan. Un envío que lleve más de 15 minutos en `queued` sin job vivo en
+la cola lo marca `failed` un barrido automático cada 5 minutos (`lastError`: "job perdido").
 
 ### `DELETE /messages/:id` — ADMIN, SUPER_ADMIN
 
 Borrado lógico del registro (no retira el mensaje de WhatsApp).
 
 ---
+
+## Operación (administradores)
+
+### `GET /status`
+
+```json
+{
+  "uptimeSeconds": 3600, "memory": { "rssMb": 110, "heapUsedMb": 60 },
+  "sessions": { "total": 2, "byState": { "open": 1, "connecting": 1 }, "list": [ ... ] },
+  "queues": { "send": { "waiting": 0, "active": 0, "delayed": 0, "failed": 3 }, "webhook": { ... }, "maintenance": { ... } },
+  "messagesLast24h": { "sent": 120, "delivered": 100, "failed": 2 },
+  "webhook": { "enabled": true, "signed": true, "events": { "pending": 0, "sent": 300, "failed": 0 } },
+  "alerts": [ "3 trabajos de envío fallidos conservados en Redis" ]
+}
+```
+
+### `GET /webhooks/config`, `GET /webhooks/events?status=&page=&limit=`, `GET /webhooks/events/counts`
+
+Configuración efectiva del webhook y listado de eventos (`pending`, `sent`, `failed`) con
+`attempts`, `lastError` y `sentAt`.
+
+### `POST /webhooks/events/:id/replay`, `POST /webhooks/events/replay-failed`
+
+Reencolan un evento concreto o todos los fallidos. El receptor debe ser idempotente por
+`eventId`: un replay entrega el mismo evento otra vez.
 
 ## Salud
 
@@ -368,9 +414,22 @@ y `User-Agent: whatsapp-gateway-webhook/1.0`. Con `WEBHOOK_SECRET`, añade
 | `session.open` | `sessionId, number` |
 | `session.close` | `sessionId, statusCode, shouldReconnect` |
 
-Reintentos: 5 con backoff exponencial (1 s a 60 s), **en memoria**. Un reinicio del
-contenedor pierde los pendientes. El receptor debe ser idempotente por `messageId` y
-responder 2xx rápido (timeout 10 s).
+Cada evento se guarda en `webhook_events` antes del primer intento y se entrega por una cola
+persistente: 10 intentos con backoff exponencial desde 2 s (unos 34 min). Un reinicio no
+pierde nada. Pasados los 10 intentos queda `failed` y se reenvía con
+`POST /webhooks/events/:id/replay` o `replay-failed`. El receptor debe responder 2xx en
+menos de 10 s y ser **idempotente por `eventId`** (cabecera `X-Event-Id` y campo del cuerpo):
+reintentos y replays entregan el mismo evento más de una vez.
+
+Cabeceras: `Content-Type: application/json`, `X-Event-Id`, `X-Event-Type` y, con secreto,
+`X-Signature: sha256=<hmac del cuerpo exacto>`. Cuerpo:
+
+```json
+{ "eventId": "7c2a...", "event": "message.incoming", "timestamp": "2026-10-19T20:00:00.000Z", "attempt": 1, "data": { ... } }
+```
+
+La URL debe ser `https://`; con `WEBHOOK_ALLOW_HTTP=true` se admite `http://` para un
+receptor en tu red (p. ej. `http://host.docker.internal:9000/hook`).
 
 Verificación de firma en Node:
 

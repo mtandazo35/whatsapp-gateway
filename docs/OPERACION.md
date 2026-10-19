@@ -97,28 +97,32 @@ npm run migration:show                                          # [X] aplicadas,
 
 ## Respaldo y restauración
 
-`scripts/backup.sh` genera `data/backups/<fecha>/` con el `pg_dump` (formato custom) y un
-`sesiones.tgz`. El instalador ofrece el cron diario a las 03:00. Retención
-`BACKUP_RETENTION_DAYS` (30).
+`scripts/backup.sh` genera `data/backups/<fecha>/` con `whatsapp.dump` (pg_dump custom),
+`sesiones.tgz` (credenciales de Baileys), `redis.rdb` (colas e idempotencia), `INFO.txt` y
+`MANIFEST.sha256`. Con `BACKUP_ENCRYPT_PASSPHRASE` (el instalador la genera en `.env`) cada
+archivo se cifra con AES-256 y queda como `.enc`. Con `BACKUP_REMOTE_DEST=user@host:/ruta/`
+se copia fuera del servidor por rsync/ssh. El instalador ofrece el cron diario a las 03:00;
+retención local `BACKUP_RETENTION_DAYS` (30).
 
-El respaldo se queda en el mismo host: cópialo fuera (rsync/scp a otro servidor o a un
-bucket) y cifra `sesiones.tgz`, que equivale a tener los teléfonos.
+**Guarda `BACKUP_ENCRYPT_PASSPHRASE` fuera del servidor**: sin ella los `.enc` no se pueden
+abrir. Y saca los respaldos del host: un respaldo que solo vive en el servidor muere con él.
 
-Restaurar en un host nuevo:
+Restaurar sobre el stack levantado (mismo host u otro con el mismo `.env`):
 
 ```bash
-git clone https://github.com/mtandazo35/whatsapp-gateway.git && cd whatsapp-gateway
-# copiar el .env antiguo (mismo JWT_SECRET y POSTGRES_PASSWORD)
-sudo bash install.sh                                   # levanta vacío
-docker compose -p whatsapp-gateway stop api
-docker compose -p whatsapp-gateway exec -T postgres \
-  pg_restore -U whatsapp -d whatsapp --clean --if-exists < data/backups/<fecha>/whatsapp.dump
-tar -xzf data/backups/<fecha>/sesiones.tgz -C data/
-chown -R 1000:1000 data/sesiones
-docker compose -p whatsapp-gateway start api
+bash scripts/restore.sh data/backups/2026-10-19_0300            # pide escribir RESTAURAR
+bash scripts/restore.sh data/backups/2026-10-19_0300 --sin-redis # solo BD y credenciales
 ```
 
-Las sesiones se reconectan solas si las credenciales siguen vigentes en WhatsApp.
+El script verifica el manifiesto, descifra, guarda el estado actual en
+`data/backups/pre-restore_<fecha>/`, para la API, hace `pg_restore --clean`, repone
+`data/sesiones`, carga Redis y arranca comprobando `/api/health`. Si algo sale mal, el mismo
+script restaura la carpeta `pre-restore_*`.
+
+En un host nuevo: `git clone`, copiar el `.env` antiguo (mismos `JWT_SECRET`,
+`POSTGRES_PASSWORD` y `BACKUP_ENCRYPT_PASSPHRASE`), `sudo bash install.sh` y después
+`restore.sh` con la carpeta copiada. Las sesiones se reconectan solas si las credenciales
+siguen vigentes en WhatsApp.
 
 ## Ciclo de vida de un envío
 
@@ -132,11 +136,26 @@ Las sesiones se reconectan solas si las credenciales siguen vigentes en WhatsApp
 6. Si el worker falla antes de enviar, Bull reintenta (texto: 1 intento; archivos: 2 con
    backoff). En el último intento la fila queda `failed` con `lastError`.
 
-Jobs fallidos se conservan en Redis (hasta 1000) para inspección:
+7. Un barrido cada 5 min marca `failed` ("job perdido") los `queued` con más de 15 min sin
+   job vivo (reinicio con la cola vacía, Redis borrado).
+8. Desactivar o borrar la sesión cancela sus jobs en espera y marca `failed` sus `queued`.
+9. Un `failed` de texto o URL se reintenta con `POST /whatsapp/messages/:id/retry` (o el
+   botón *Reintentar* del historial): crea un mensaje nuevo.
+
+`GET /status` (admin) o la pestaña Administración resumen colas, sesiones, mensajes de las
+últimas 24 h, webhooks y alertas. Jobs fallidos se conservan en Redis (hasta 1000):
 
 ```bash
 docker compose -p whatsapp-gateway exec redis redis-cli KEYS 'bull:send-file:*' | head
 ```
+
+### Webhook saliente
+
+Los eventos viven en la tabla `webhook_events` (`pending`, `sent`, `failed`) y se entregan
+por la cola `webhook` con 10 intentos. Si el receptor estuvo caído más de ~34 min, los
+eventos quedan `failed`: `POST /webhooks/events/replay-failed` (o el botón *Reenviar
+fallidos*) los vuelve a encolar. Para ver el último error de un evento:
+`GET /webhooks/events?status=failed`.
 
 ## Diagnóstico
 
@@ -152,7 +171,11 @@ docker compose -p whatsapp-gateway exec redis redis-cli KEYS 'bull:send-file:*' 
 | `La URL apunta a una dirección interna` | Anti-SSRF: el host resuelve a IP privada o es un nombre interno. Usar una URL pública sin redirecciones. |
 | QR no aparece | Permisos de `data/sesiones` (`chown -R 1000:1000 data/`). |
 | API no arranca | `JWT_SECRET` ausente o corto; `logs api` lo dice en la primera línea. |
-| Webhook no llega | `WEBHOOK_URL` vacío o el receptor tarda más de 10 s. Los reintentos viven en memoria. |
+| Webhook no llega | `GET /webhooks/config`: si `enabled:false`, la URL no es https (o falta `WEBHOOK_ALLOW_HTTP`). Si está activo, `GET /webhooks/events` muestra `lastError` del receptor (timeout 10 s, HTTP 5xx). |
+| Mensaje `failed` con `job perdido` | La API se reinició con el job sin procesar o Redis se vació. Reintentar desde el historial. |
+| Mensaje `failed` con `sesión desactivada` | Alguien desactivó o borró la sesión mientras había envíos en cola. |
+| 409 en `/whatsapp/send` | Misma `Idempotency-Key` con otro cuerpo. Generar una clave por envío. |
+| Buscar una petición concreta | `logs api \| grep rid=<X-Request-Id>` |
 
 ## Límites de capacidad conocidos
 

@@ -3,6 +3,55 @@
 Formato: una entrada por versión con lo que cambia para quien opera o integra el gateway.
 La versión está en `api/package.json`.
 
+## 0.3.0 — 2026-10-19
+
+Cierra el resto de la lista P1/P2 de la auditoría salvo multi-worker y TypeScript estricto.
+
+### Requiere al actualizar
+
+- Nada manual: la migración `WebhooksYAuditoria` añade `messages.kind`, `caption`, `fast_mode`,
+  `requested_by` y la tabla `webhook_events`.
+- Si usas webhook por `http://` (receptor en tu red) añade `WEBHOOK_ALLOW_HTTP=true`; por
+  defecto ahora se exige `https://` y, si no se cumple, el webhook queda desactivado con un
+  error en el log.
+- La imagen se construye con `npm ci`: `package-lock.json` debe estar al día (lo está).
+
+### Añadido
+
+- **Webhooks persistentes**: cada evento se guarda en `webhook_events` antes de enviarse y
+  se entrega por una cola Bull propia (10 intentos, backoff exponencial, ~34 min). Un
+  reinicio no pierde nada. Cabeceras `X-Event-Id` y `X-Event-Type`; el cuerpo incluye
+  `eventId`, `timestamp` y `attempt`. Administración: `GET /webhooks/events`,
+  `GET /webhooks/events/counts`, `POST /webhooks/events/:id/replay`,
+  `POST /webhooks/events/replay-failed`, `GET /webhooks/config`.
+- **Idempotencia completa**: la `Idempotency-Key` guarda el hash del cuerpo. Misma clave con
+  otro cuerpo → **409**. Cubre `/whatsapp/send` y `/whatsapp/send-media/url`. Una reserva
+  abandonada caduca a los 2 min (antes 24 h).
+- **Desactivar o borrar una sesión** (`PATCH/DELETE /session/:id`) cierra el socket, borra
+  las credenciales, cancela los jobs en cola y marca sus mensajes `failed`.
+- **Barrido cada 5 min** de mensajes `queued` con más de 15 min cuyo job ya no existe en
+  Bull: pasan a `failed` con motivo "job perdido".
+- **`GET /status`** (admin): sesiones por estado, colas (envío, webhook, mantenimiento),
+  mensajes de las últimas 24 h, webhooks y alertas.
+- **`POST /whatsapp/messages/:id/retry`**: reintenta un mensaje `failed` de texto o URL
+  creando uno nuevo. Los archivos subidos no se reintentan (el temporal ya no existe).
+- **Auditoría**: `messages.requested_by` guarda qué usuario pidió cada envío;
+  `GET /messages` lo devuelve (`requestedBy.email`) y admite `?status=`.
+- **Request-Id**: cada respuesta lleva `X-Request-Id` (se respeta el que mande el cliente) y
+  la API escribe una línea por petición con método, ruta, código, ms, usuario e IP.
+- **Respaldos**: `scripts/backup.sh` incluye Redis, genera `MANIFEST.sha256`, cifra con
+  AES-256 si hay `BACKUP_ENCRYPT_PASSPHRASE` (el instalador la genera) y copia fuera del
+  host con `BACKUP_REMOTE_DEST`. Nuevo `scripts/restore.sh <carpeta>` con verificación,
+  respaldo previo y arranque comprobado.
+- **CI** (`.github/workflows/ci.yml`): build, unitarias, lint, `npm audit`, e2e con Postgres
+  y Redis, shellcheck y build de la imagen.
+- **Dockerfile** con `npm ci` y poda de dependencias de desarrollo en lugar de una segunda
+  instalación.
+- **Frontend**: selector de sesión y botón de nueva sesión, filtro por estado en el
+  historial, botón *Reintentar* en fallidos con el motivo visible, pestaña *Administración*
+  (estado del servicio, webhooks con reenvío, alta y activación de usuarios), aviso de 429 y
+  `Idempotency-Key` automática en cada envío.
+
 ## 0.2.0 — 2026-10-19
 
 Primer bloque P1 de la auditoría: rate limiting y migraciones. Sin cambios en el contrato
