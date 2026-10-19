@@ -32,6 +32,18 @@ cd "$SCRIPT_DIR"
 COMPOSE_PROJECT="whatsapp-gateway"
 ADMIN_GENERADO=0
 
+# Pregunta si/no. Sin terminal (cron, pipe, CI) no bloquea: usa la respuesta por
+# defecto que se le pasa como segundo argumento ("n" si no se indica).
+ask_yn() {
+  local ans
+  if [ -t 0 ]; then
+    read -rp "$1 [y/N] " ans
+  else
+    ans="${2:-n}"
+  fi
+  [[ "${ans,,}" == "y" ]]
+}
+
 # Contraseña que cumple la politica de la API (8+, mayuscula, minuscula, numero, simbolo).
 gen_admin_password() {
   echo "Wa$(openssl rand -hex 10)!"
@@ -50,6 +62,7 @@ if [ -z "${DOMAIN:-}" ] || [ "$DOMAIN" = "ejemplo.midominio.com" ]; then
   echo "  - Un dominio apuntando a la IP de este servidor (registro A en DNS)"
   echo "  - Puertos 80 y 443 abiertos en el firewall"
   echo
+  [ -t 0 ] || err "Falta DOMAIN y no hay terminal para preguntarlo: usa DOMAIN=wa.midominio.com bash install.sh"
   read -rp "Ingresa el dominio (ej. wa.midominio.com): " DOMAIN
   DOMAIN="$(echo "$DOMAIN" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
 fi
@@ -69,8 +82,7 @@ DOMAIN_IP="$(getent hosts "$DOMAIN" 2>/dev/null | awk '{print $1; exit}' || echo
 if [ "$SERVER_IP" != "?" ] && [ "$DOMAIN_IP" != "?" ] && [ "$SERVER_IP" != "$DOMAIN_IP" ]; then
   warn "El dominio resuelve a $DOMAIN_IP pero este servidor tiene IP $SERVER_IP"
   warn "Si no actualizas el DNS, el certificado SSL FALLARA"
-  read -rp "Continuar de todos modos? [y/N] " ans
-  [[ "${ans,,}" == "y" ]] || err "Abortado por el usuario"
+  ask_yn "Continuar de todos modos?" || err "Abortado: el dominio no apunta a este servidor"
 fi
 
 # =============== 2. DOCKER ===============
@@ -181,8 +193,7 @@ for p in 80 443; do
     HOLDER="$(ss -tlnp 2>/dev/null | awk -v p=":${p}$" '$4 ~ p {print $NF; exit}')"
     warn "Puerto ${p} ya esta en uso por: ${HOLDER}"
     warn "Caddy NO podra obtener SSL si el puerto esta ocupado"
-    read -rp "Continuar igualmente? [y/N] " ans
-    [[ "${ans,,}" == "y" ]] || err "Libera el puerto ${p} y reintenta"
+    ask_yn "Continuar igualmente?" || err "Libera el puerto ${p} y reintenta"
   fi
 done
 
@@ -222,7 +233,13 @@ for i in $(seq 1 $ATTEMPTS); do
   sleep 3
 done
 
-[ "$HTTPS_OK" = "1" ] || warn "HTTPS aun no responde. Revisa que el dominio resuelve y los puertos 80/443 estan abiertos."
+if [ "$HTTPS_OK" != "1" ]; then
+  warn "HTTPS aun no responde. Revisa que el dominio resuelve y los puertos 80/443 estan abiertos."
+  warn "Logs de Caddy: docker compose -p ${COMPOSE_PROJECT} logs web"
+  if [[ "$DOMAIN" =~ ^[0-9.]+$ ]]; then
+    warn "DOMAIN es una IP: Caddy dentro de Docker no puede servir TLS por IP (ve la IP interna del contenedor). Usa un nombre DNS."
+  fi
+fi
 
 # =============== 8. BACKUP CRON (opcional) ===============
 hdr "Backup automatico"
@@ -230,8 +247,8 @@ CRON_FILE="/etc/cron.d/whatsapp-gateway-backup"
 if [ -f "$CRON_FILE" ]; then
   log "Cron de backup ya instalado en $CRON_FILE"
 else
-  read -rp "Instalar cron diario de backup (3:00 AM)? [y/N] " ans
-  if [[ "${ans,,}" == "y" ]]; then
+  # Sin terminal decide INSTALL_BACKUP_CRON=y|n (por defecto n).
+  if ask_yn "Instalar cron diario de backup (3:00 AM)?" "${INSTALL_BACKUP_CRON:-n}"; then
     cat > "$CRON_FILE" <<EOF
 # Respaldo diario de whatsapp-gateway (Postgres + sesiones Baileys)
 0 3 * * * root cd ${SCRIPT_DIR} && bash scripts/backup.sh >> /var/log/wa-gateway-backup.log 2>&1
