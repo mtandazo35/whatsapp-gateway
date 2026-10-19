@@ -119,7 +119,9 @@ Mismos campos que el alta más `isActive`. Reglas:
 
 ### `DELETE /user/:id`, `PUT /user/restore/:id` — ADMIN, SUPER_ADMIN
 
-Borrado lógico y restauración. No puedes borrarte a ti mismo.
+Borrado lógico y restauración. No puedes borrarte a ti mismo. El correo sigue reservado
+mientras el usuario esté en la papelera: para reutilizarlo, restáuralo o cámbiale el correo
+antes de dar de alta otro.
 
 ---
 
