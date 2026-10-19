@@ -201,7 +201,8 @@ export class SendFileQueueProcessor {
 
       const pathname = new URL(mediaUrl).pathname;
       const cleanName = basename(pathname) || 'archivo';
-      const mimeType = response.headers['content-type']?.split(';')[0].trim()
+      const headerType = String(response.headers['content-type'] ?? '').split(';')[0].trim()
+      const mimeType = headerType
         || contentType
         || mime.lookup(cleanName)
         || 'application/octet-stream';

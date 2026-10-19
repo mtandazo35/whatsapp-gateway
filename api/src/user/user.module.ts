@@ -21,7 +21,8 @@ import { AuthGuard } from './guards/auth.guard';
     JwtModule.register({
       global: true,
       secret: process.env.JWT_SECRET,
-      signOptions: { expiresIn: process.env.JWT_EXPIRES_IN || '8h' },
+      // jsonwebtoken tipa expiresIn como StringValue ('8h', '1d'...) y no acepta string plano.
+      signOptions: { expiresIn: (process.env.JWT_EXPIRES_IN || '8h') as any },
     }),
   ],
   exports: [TypeOrmModule]

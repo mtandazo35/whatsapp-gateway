@@ -16,7 +16,7 @@ export interface QueuedSend {
   jobId: string | number
 }
 
-interface SessionInfo {
+export interface SessionInfo {
   sessionId: string
   state: string
   connected: boolean
