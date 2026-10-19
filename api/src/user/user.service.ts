@@ -15,6 +15,7 @@ import { User } from './entities/user.entity';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { PaginationDto } from 'src/common';
+import { isEmail, isStrongPassword } from 'class-validator';
 import { JwtService } from '@nestjs/jwt';
 import { JwtPayload } from './interfaces/jwt-payload.interface';
 import { LoginUserDto } from './dto/login-user.dto';
@@ -43,11 +44,22 @@ export class UserService implements OnModuleInit {
       const total = await this.userRepository.count({ withDeleted: true })
       if (total > 0) return
 
-      const email = process.env.ADMIN_EMAIL?.trim()
+      const email = process.env.ADMIN_EMAIL?.trim().toLowerCase()
       const password = process.env.ADMIN_PASSWORD
 
       if (!email || !password) {
         this.logger.warn('No hay usuarios y faltan ADMIN_EMAIL / ADMIN_PASSWORD: nadie podrá iniciar sesión')
+        return
+      }
+
+      // El login valida el correo con IsEmail: si el de la semilla no pasa (p. ej.
+      // admin@1.2.3.4), el usuario se crearía pero nunca podría entrar.
+      if (!isEmail(email)) {
+        this.logger.error(`ADMIN_EMAIL "${email}" no es un correo válido; no se crea el administrador inicial`)
+        return
+      }
+      if (!isStrongPassword(password)) {
+        this.logger.error('ADMIN_PASSWORD no cumple la política (8+, mayúscula, minúscula, número y símbolo); no se crea el administrador inicial')
         return
       }
 

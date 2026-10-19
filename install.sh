@@ -49,6 +49,16 @@ gen_admin_password() {
   echo "Wa$(openssl rand -hex 10)!"
 }
 
+# Correo del admin inicial. Si DOMAIN es una IP, "admin@1.2.3.4" no pasa el validador
+# de email del login, asi que se usa un dominio ficticio valido.
+gen_admin_email() {
+  if [[ "$DOMAIN" =~ ^[0-9.]+$ ]]; then
+    echo "admin@whatsapp-gateway.local"
+  else
+    echo "admin@${DOMAIN}"
+  fi
+}
+
 # =============== 1. DOMINIO ===============
 hdr "Configurando dominio"
 
@@ -123,7 +133,7 @@ if [ ! -f .env ]; then
   log "Generando .env con secretos aleatorios..."
   POSTGRES_PASSWORD="$(openssl rand -hex 16)"
   JWT_SECRET="$(openssl rand -hex 32)"
-  ADMIN_EMAIL="admin@${DOMAIN}"
+  ADMIN_EMAIL="$(gen_admin_email)"
   ADMIN_PASSWORD="$(gen_admin_password)"
   ADMIN_GENERADO=1
   cat > .env <<EOF
@@ -165,7 +175,7 @@ else
 
   # Instalaciones anteriores a la autenticacion: añadir el admin inicial si falta.
   if ! grep -q "^ADMIN_EMAIL=" .env; then
-    ADMIN_EMAIL="admin@${DOMAIN}"
+    ADMIN_EMAIL="$(gen_admin_email)"
     ADMIN_PASSWORD="$(gen_admin_password)"
     ADMIN_GENERADO=1
     {
