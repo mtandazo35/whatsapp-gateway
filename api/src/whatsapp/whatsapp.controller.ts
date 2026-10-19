@@ -1,4 +1,19 @@
-import { BadRequestException, Body, Controller, DefaultValuePipe, Delete, Get, Headers, Param, ParseBoolPipe, Post, Query, UploadedFiles, UseInterceptors } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  DefaultValuePipe,
+  Delete,
+  Get,
+  Headers,
+  HttpCode,
+  Param,
+  ParseBoolPipe,
+  Post,
+  Query,
+  UploadedFiles,
+  UseInterceptors,
+} from '@nestjs/common';
 import { WhatsappService } from './whatsapp.service';
 import { SendMessageDto } from './dto/send-message.dto';
 import { FileFieldsInterceptor } from '@nestjs/platform-express';
@@ -9,7 +24,23 @@ import { SendMediaUrlDto } from './dto/send-media-url.dto';
 import { SendMediaDto } from './dto/send-media.dto';
 import { SessionService } from 'src/session/session.service';
 import { IdempotencyService } from './idempotency.service';
+import { GetUser } from 'src/user/decorators';
+import { AuthUser } from 'src/user/interfaces/auth-user.interface';
+import { Session } from 'src/session/entities/session.entity';
+import { removeQuietly } from './utils/files-utils';
 
+/** Límites de subida por petición (Caddy además corta el cuerpo en 25 MB). */
+export const UPLOAD_MAX_FILES = 10
+export const UPLOAD_MAX_FILE_BYTES = 25 * 1024 * 1024
+
+/**
+ * Todas las rutas exigen token (guard global) y comprueban que el usuario sea
+ * dueño de la sesión o administrador.
+ *
+ * Los envíos responden 202 con {status:'queued', messageId, jobId}: la API
+ * acepta el trabajo, no garantiza la entrega. El estado real se consulta en
+ * GET /messages/:messageId (queued -> sent -> delivered -> read | failed).
+ */
 @Controller('whatsapp')
 export class WhatsappController {
   constructor(
@@ -18,20 +49,34 @@ export class WhatsappController {
     private readonly idempotency: IdempotencyService,
   ) {}
 
+  private async sessionLista(sessionId: string, actor: AuthUser): Promise<Session> {
+    const session = await this.sessionService.findSessionForUser(sessionId, actor);
+
+    if (!session.isActive)
+      throw new BadRequestException(`La sesión con el id ${ sessionId } se encuentra inactiva`)
+
+    return session
+  }
+
+  private numeroLimpio(raw: string): string {
+    const number = (raw ?? '').replace(/\D/g, "");
+
+    if (number.length < 10 || number.length > 15) {
+      throw new BadRequestException(`Número inválido: ${raw}`);
+    }
+    return number
+  }
+
   @Get('/qr/:sessionId')
-  async getQR(@Param('sessionId') sessionId: string) {
-
-    const exist = await this.sessionService.findSession(sessionId);
-
-    if (!exist)
-      throw new BadRequestException(`No existe una session con el id ${ sessionId }, por favor comunicarte con el administrador`)
+  async getQR(@Param('sessionId') sessionId: string, @GetUser() actor: AuthUser) {
+    await this.sessionLista(sessionId, actor);
 
     this.whatsappService.resetQrAttempts(sessionId)
 
     const state = this.whatsappService.getConnectionState(sessionId)
 
     if (state === 'open')
-      return { status: 'waiting', message: `la sesion ${sessionId} ya tiene vinculado whatSapp` }
+      return { status: 'waiting', message: `La sesión ${sessionId} ya tiene vinculado WhatsApp` }
 
     await this.whatsappService.startSession(sessionId);
 
@@ -47,32 +92,28 @@ export class WhatsappController {
     return { status: 'ok', qr }
   }
 
+  /** Estado en memoria de las sesiones visibles para el usuario. */
   @Get('/status-sessions')
-  async statusSesion() {
-    return this.whatsappService.getAllSessionStates()
+  async statusSesion(@GetUser() actor: AuthUser) {
+    const visibles = await this.sessionService.visibleSessionIds(actor)
+    const states = await this.whatsappService.getAllSessionStates()
+
+    if (visibles === null) return states
+    return states.filter(s => visibles.has(s.sessionId))
   }
 
   @Post('/send')
+  @HttpCode(202)
   async sendMessage(
     @Body() data: SendMessageDto,
     @Headers('idempotency-key') idempotencyKey: string | undefined,
     @Query('fastMode', new DefaultValuePipe(false), ParseBoolPipe) fastMode: boolean,
+    @GetUser() actor: AuthUser,
   ) {
-    let { sessionId, number, message } = data;
+    const { sessionId, message } = data;
 
-    const session = await this.sessionService.findSession(sessionId);
-
-    if (!session)
-      throw new BadRequestException(`No existe una session con el id ${ sessionId }, por favor comunicarte con el administrador`)
-
-    if (!session.isActive)
-      throw new BadRequestException(`La session con el id ${ sessionId }, se encuentra inactiva`)
-
-    number = number.replace(/\D/g, "");
-
-    if (number.length < 10) {
-      throw new BadRequestException(`Número inválido: ${data.number}`);
-    }
+    const session = await this.sessionLista(sessionId, actor)
+    const number = this.numeroLimpio(data.number)
 
     const idemKey = idempotencyKey?.trim()
     if (idemKey) {
@@ -86,13 +127,14 @@ export class WhatsappController {
     }
 
     try {
-      const result = await this.whatsappService.sendMessage(sessionId, number, message, fastMode)
+      const { messageId, jobId } = await this.whatsappService.sendMessage(session, number, message, fastMode)
 
-      if (!result) {
-        throw new BadRequestException(`No se pudo enviar mensaje. ¿La sesión está activa?`)
+      const response = {
+        status: 'queued',
+        message: `Mensaje aceptado para ${number}; consulta /api/messages/${messageId} para ver el estado`,
+        messageId,
+        jobId,
       }
-
-      const response = { status: 'ok', message: `Mensaje enviado a ${number}` }
       if (idemKey) await this.idempotency.store(`${sessionId}:${idemKey}`, response)
       return response
     } catch (err) {
@@ -102,37 +144,33 @@ export class WhatsappController {
   }
 
   @Post('/send-media/url')
-  async sendMediaFromUrl(@Body() body: SendMediaUrlDto) {
-    let { sessionId, number, mediaUrl, caption } = body;
+  @HttpCode(202)
+  async sendMediaFromUrl(@Body() body: SendMediaUrlDto, @GetUser() actor: AuthUser) {
+    const { sessionId, mediaUrl, caption } = body;
 
-    const session = await this.sessionService.findSession(sessionId);
+    const session = await this.sessionLista(sessionId, actor)
+    const number = this.numeroLimpio(body.number)
 
-    if (!session)
-      throw new BadRequestException(`No existe una session con el id ${ sessionId }, por favor comunicarte con el administrador`)
+    const { messageId, jobId } = await this.whatsappService.sendMediaMessage(session, number, mediaUrl, caption)
 
-    if (!session.isActive)
-      throw new BadRequestException(`La session con el id ${ sessionId }, se encuentra inactiva`)
-
-    number = number.replace(/\D/g, "");
-
-    if (number.length < 10) {
-      throw new BadRequestException(`Número inválido: ${body.number}`);
+    return {
+      status: 'queued',
+      message: 'El archivo se encuentra en cola de envío',
+      messageId,
+      jobId,
     }
-
-    const result = await this.whatsappService.sendMediaMessage(sessionId, number, mediaUrl, caption)
-
-    if (!result) {
-      throw new BadRequestException('No se pudo enviar el archivo, por favor comprobar la url del archivo')
-    }
-
-    return { status: 'ok', message: 'El archivo se encuentra en procesamiento de envio' }
   }
 
   @UseInterceptors(FileFieldsInterceptor([
-    { name: 'files' }
+    { name: 'files', maxCount: UPLOAD_MAX_FILES }
   ],
     {
       fileFilter: fileFilter,
+      limits: {
+        files: UPLOAD_MAX_FILES,
+        fileSize: UPLOAD_MAX_FILE_BYTES,
+        fields: 10,
+      },
       storage: diskStorage({
         destination: function (_, __, cb) {
           cb(null, `./static`)
@@ -142,59 +180,65 @@ export class WhatsappController {
     }
   ))
   @Post('/send-media/file')
+  @HttpCode(202)
   async sendMediaFromFile(
     @Body() body: SendMediaDto,
-    @UploadedFiles() files: { files?: Express.Multer.File[] }
+    @UploadedFiles() files: { files?: Express.Multer.File[] },
+    @GetUser() actor: AuthUser,
   ) {
+    const subidos = files?.files ?? []
 
-    if (!files.files)
-      throw new BadRequestException('Debes enviar al menos 1 archivo')
+    // multer ya escribió en disco: si algo de lo que sigue rechaza la petición,
+    // se borran los archivos para no dejar huérfanos.
+    try {
+      if (subidos.length === 0)
+        throw new BadRequestException('Debes enviar al menos 1 archivo')
 
-    let { sessionId, number, caption } = body;
+      const { sessionId, caption } = body;
 
-    const session = await this.sessionService.findSession(sessionId);
+      const session = await this.sessionLista(sessionId, actor)
+      const number = this.numeroLimpio(body.number)
 
-    if (!session)
-      throw new BadRequestException(`No existe una session con el id ${ sessionId }, por favor comunicarte con el administrador`)
+      const queued = await this.whatsappService.sendMediaFiles(session, number, subidos, caption)
 
-    if (!session.isActive)
-      throw new BadRequestException(`La session con el id ${ sessionId }, se encuentra inactiva`)
-
-    number = number.replace(/\D/g, "");
-
-    if (number.length < 10) {
-      throw new BadRequestException(`Número inválido: ${body.number}`);
+      return {
+        status: 'queued',
+        message: `${queued.length} archivo(s) en cola de envío`,
+        queued,
+      }
+    } catch (err) {
+      await removeQuietly(subidos.map(f => f.path))
+      throw err
     }
-
-    const result = await this.whatsappService.sendMediaFiles(sessionId, number, files.files, caption)
-
-    if (!result) {
-      throw new BadRequestException('No se pudo enviar el archivo.')
-    }
-
-    return { status: 'ok', message: 'El archivo se encuentra en procesamiento de envio' }
   }
 
   @Delete('/session/:sessionId')
-  async closeSession(@Param('sessionId') sessionId: string) {
+  async closeSession(@Param('sessionId') sessionId: string, @GetUser() actor: AuthUser) {
+    await this.sessionService.findSessionForUser(sessionId, actor);
+
     const result = await this.whatsappService.logoutSession(sessionId)
     return { status: 'ok', sessionId, result }
   }
 
   @Get('session/:sessionId/info')
-  async getSessionInfo(@Param('sessionId') sessionId: string) {
+  async getSessionInfo(@Param('sessionId') sessionId: string, @GetUser() actor: AuthUser) {
+    await this.sessionService.findSessionForUser(sessionId, actor);
+
     return this.whatsappService.getSessionInfo(sessionId)
   }
 
   @Get('check-number')
   async checkNumber(
     @Query('sessionId') sessionId: string,
-    @Query('number') number: string
+    @Query('number') number: string,
+    @GetUser() actor: AuthUser,
   ) {
     if (!sessionId || !number) {
       throw new BadRequestException('Debes enviar sessionId y number');
     }
 
-    return this.whatsappService.checkIfNumberExists(sessionId, number);
+    await this.sessionService.findSessionForUser(sessionId, actor);
+
+    return this.whatsappService.checkIfNumberExists(sessionId, this.numeroLimpio(number));
   }
 }

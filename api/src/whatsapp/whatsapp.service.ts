@@ -1,19 +1,41 @@
-import { BadRequestException, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common'
+import { BadRequestException, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common'
 import { WhatsappSessionManager } from './whatsapp-session-manager';
-import { InjectRepository } from '@nestjs/typeorm';
 import { Session } from 'src/session/entities/session.entity';
-import { Repository } from 'typeorm';
 import { MessagesService } from 'src/messages/messages.service';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
-import { randomUUID } from 'crypto';
+import { assertSafeUrl, probeMediaUrl } from './utils/url-guard';
+
+/** Cuántos jobs fallidos se conservan en Redis para diagnóstico. */
+const KEEP_FAILED_JOBS = 1000
+/** Los datos de perfil (foto, perfil comercial) se piden a WhatsApp como mucho cada 5 min. */
+const INFO_CACHE_MS = 5 * 60 * 1000
+
+export interface QueuedSend {
+  messageId: string
+  jobId: string | number
+}
+
+interface SessionInfo {
+  sessionId: string
+  state: string
+  connected: boolean
+  info: {
+    jid: string | null
+    number: string | null
+    pushName: string | null
+    profilePicUrl: string | null
+    businessProfile: any
+  } | null
+}
 
 @Injectable()
 export class WhatsappService implements OnModuleInit {
 
+  private readonly logger = new Logger(WhatsappService.name)
+  private readonly infoCache = new Map<string, { at: number; info: SessionInfo['info'] }>()
+
   constructor(
-    @InjectRepository(Session)
-    private readonly sessionRepository: Repository<Session>,
     @InjectQueue('send-file')
     private sendMessageFileQueue: Queue,
     private readonly whatsAppSessionManager: WhatsappSessionManager,
@@ -24,7 +46,7 @@ export class WhatsappService implements OnModuleInit {
     await this.whatsAppSessionManager.loadAllSessions();
   }
 
-   /**
+  /**
    * Valida que la sesión esté conectada
    */
   private validateSession(sessionId: string) {
@@ -43,153 +65,102 @@ export class WhatsappService implements OnModuleInit {
     return sock;
   }
 
-  async sendMessage(sessionId: string, number: string, message: string, fastMode: boolean) {
+  /**
+   * Crea el registro del mensaje en estado queued y encola el job. Si encolar
+   * falla, el mensaje queda como failed con el motivo. El id del mensaje es
+   * también el jobId: estable, consultable y sin duplicar jobs por reintentos.
+   */
+  private async encolar(
+    nombre: 'sendMessageText' | 'sendMessageUrl' | 'sendMessageFile',
+    session: Session,
+    texto: string,
+    number: string,
+    data: Record<string, any>,
+    opts: { attempts: number; backoffMs?: number },
+  ): Promise<QueuedSend> {
+    const msg = await this.messageService.createQueued({ session, message: texto, receptor: number })
+
     try {
-
-      const session = await this.sessionRepository.findOneBy({ sessionId });
-
-      if (!session) {
-        throw new BadRequestException(`Sesión ${sessionId} no encontrada`);
-      }
-
-      return await this.sendMessageFileQueue.add(
-        'sendMessageText',
+      const job = await this.sendMessageFileQueue.add(
+        nombre,
+        { ...data, messageId: msg.id, sessionId: session.sessionId, number },
         {
-          message,
-          sessionId,
-          number,
-          fastMode
-        },
-        {
-          jobId: randomUUID(),
-          removeOnFail: true,
+          jobId: msg.id,
           removeOnComplete: true,
-          attempts: 1
+          removeOnFail: KEEP_FAILED_JOBS,
+          attempts: opts.attempts,
+          ...(opts.backoffMs ? { backoff: { type: 'exponential', delay: opts.backoffMs } } : {}),
         }
       );
+      return { messageId: msg.id, jobId: job.id }
     } catch (error) {
-      const session = await this.sessionRepository.findOneBy({ sessionId });
-      if (session) {
-        await this.messageService.create({ message, session, receptor: number }, false);
-      }
-
-      throw new BadRequestException(`Error al enviar mensaje: ${error.message}`);
+      await this.messageService.markFailed(msg.id, error).catch(() => undefined)
+      throw new BadRequestException(`No se pudo encolar el envío: ${error?.message}`)
     }
   }
 
+  async sendMessage(session: Session, number: string, message: string, fastMode: boolean): Promise<QueuedSend> {
+    // Sin socket abierto no se acepta: antes se encolaba y se perdía en silencio.
+    this.validateSession(session.sessionId);
+
+    return this.encolar('sendMessageText', session, message, number, { message, fastMode }, { attempts: 1 })
+  }
+
   /**
-   * Envía multimedia desde una URL
+   * Envía multimedia desde una URL. La URL se valida contra destinos internos
+   * (anti-SSRF) y se sondea con HEAD antes de aceptar el trabajo.
    */
   async sendMediaMessage(
-    sessionId: string,
+    session: Session,
     number: string,
     mediaUrl: string,
     caption?: string
-  ) {
-    try {
-      // Validar sesión antes de encolar
-      this.validateSession(sessionId);
+  ): Promise<QueuedSend> {
+    this.validateSession(session.sessionId);
 
-      const { type, isValid } = await this.getFileTypeWithValidation(mediaUrl);
+    const url = await assertSafeUrl(mediaUrl)
+    const probe = await probeMediaUrl(url)
 
-      if (!isValid) {
-        throw new BadRequestException('URL inválida o tipo de archivo no soportado');
-      }
-
-      return await this.sendMessageFileQueue.add(
-        'sendMessageUrl',
-        {
-          caption,
-          number,
-          sessionId,
-          mediaUrl,
-          type
-        },
-        {
-          jobId: randomUUID(),
-          removeOnFail: true,
-          removeOnComplete: true,
-          attempts: 2,
-          backoff: {
-            type: 'exponential',
-            delay: 2000
-          }
-        }
-      );
-    } catch (error) {
-      throw new BadRequestException(`Error al enviar multimedia: ${error.message}`);
-    }
+    return this.encolar(
+      'sendMessageUrl',
+      session,
+      mediaUrl,
+      number,
+      { caption, mediaUrl: url.toString(), type: probe.type, contentType: probe.contentType },
+      { attempts: 2, backoffMs: 2000 },
+    )
   }
 
   /**
-   * Envía archivos desde el sistema de archivos
+   * Envía archivos ya subidos por multer. Un job por archivo.
    */
   async sendMediaFiles(
-    sessionId: string,
+    session: Session,
     number: string,
-    files: any[],
+    files: Express.Multer.File[],
     caption?: string
-  ) {
-    try {
-      this.validateSession(sessionId);
+  ): Promise<Array<QueuedSend & { file: string }>> {
+    this.validateSession(session.sessionId);
 
-      if (!files || files.length === 0) {
-        throw new BadRequestException('No se proporcionaron archivos');
-      }
-
-      const jobs = files.map((file) => {
-        return this.sendMessageFileQueue.add(
-          'sendMessageFile',
-          {
-            caption,
-            number,
-            sessionId,
-            path: file.path,
-            mimetype: file.mimetype,
-            originalname: file.originalname,
-          },
-          {
-            jobId: randomUUID(),
-            removeOnFail: true,
-            removeOnComplete: true,
-            attempts: 2,
-            backoff: {
-              type: 'exponential',
-              delay: 2000
-            }
-          }
-        );
-      });
-
-      await Promise.all(jobs);
-
-      return { success: true, filesQueued: files.length };
-    } catch (error) {
-      throw new BadRequestException(`Error al enviar archivos: ${error.message}`);
+    if (!files || files.length === 0) {
+      throw new BadRequestException('No se proporcionaron archivos');
     }
-  }
 
-  /**
-   * Valida el tipo de archivo desde una URL
-   * (Implementa tu lógica existente aquí)
-   */
-  private async getFileTypeWithValidation(url: string): Promise<{ type: string; isValid: boolean }> {
-    try {
-      const response = await fetch(url, { method: 'HEAD' });
-      const contentType = response.headers.get('content-type');
+    const resultados: Array<QueuedSend & { file: string }> = []
 
-      if (!contentType) {
-        return { type: 'document', isValid: false };
-      }
-
-      const type = contentType.split('/')[0];
-      return {
-        type: ['image', 'video', 'audio'].includes(type) ? type : 'document',
-        isValid: true
-      };
-    } catch {
-      return { type: 'document', isValid: false };
+    for (const file of files) {
+      const queued = await this.encolar(
+        'sendMessageFile',
+        session,
+        file.originalname,
+        number,
+        { caption, path: file.path, mimetype: file.mimetype, originalname: file.originalname },
+        { attempts: 2, backoffMs: 2000 },
+      )
+      resultados.push({ ...queued, file: file.originalname })
     }
+
+    return resultados
   }
 
   async getQR(sessionId: string) {
@@ -217,20 +188,27 @@ export class WhatsappService implements OnModuleInit {
   }
 
   async logoutSession(sessionId: string) {
+    this.infoCache.delete(sessionId)
     return this.whatsAppSessionManager.logout(sessionId)
   }
 
-  async getSessionInfo(sessionId: string) {
+  /**
+   * Estado + datos de perfil. El estado siempre es en vivo; la foto y el perfil
+   * comercial se cachean 5 min para no consultar a WhatsApp en cada polling
+   * (antes era cada 3 s por pestaña abierta: riesgo de límite o bloqueo del número).
+   */
+  async getSessionInfo(sessionId: string): Promise<SessionInfo> {
     const state = this.whatsAppSessionManager.getSessionState(sessionId)
     const sock = this.whatsAppSessionManager.getSocket(sessionId)
 
-    if (!sock) {
-      return {
-        sessionId,
-        state,
-        connected: state === 'open',
-        info: null,
-      }
+    if (!sock || state !== 'open') {
+      this.infoCache.delete(sessionId)
+      return { sessionId, state, connected: false, info: null }
+    }
+
+    const cached = this.infoCache.get(sessionId)
+    if (cached && Date.now() - cached.at < INFO_CACHE_MS) {
+      return { sessionId, state, connected: true, info: cached.info }
     }
 
     const meJid =
@@ -267,29 +245,19 @@ export class WhatsappService implements OnModuleInit {
       }
     }
 
-    return {
-      sessionId,
-      state,
-      connected: state === 'open',
-      info: {
-        jid: meJid,
-        number,
-        pushName,
-        profilePicUrl,
-        businessProfile,
-      },
-    }
+    const info = { jid: meJid, number, pushName, profilePicUrl, businessProfile }
+    this.infoCache.set(sessionId, { at: Date.now(), info })
+
+    return { sessionId, state, connected: true, info }
   }
 
   async checkIfNumberExists(sessionId: string, number: string) {
     const sock = this.whatsAppSessionManager.getSocket(sessionId)
     if (!sock) {
-      throw new NotFoundException(`No existe sesión con id ${sessionId}`);
+      throw new NotFoundException(`No existe sesión activa con id ${sessionId}`);
     }
 
-    const jid = number.includes('@s.whatsapp.net')
-      ? number
-      : `${number}@s.whatsapp.net`;
+    const jid = `${number}@s.whatsapp.net`;
 
     try {
       const [result] = await sock.onWhatsApp(jid);
@@ -298,6 +266,7 @@ export class WhatsappService implements OnModuleInit {
         jid: result?.jid || null
       };
     } catch (error) {
+      this.logger.warn(`[${sessionId}] onWhatsApp falló: ${error?.message}`)
       return {
         exists: false,
         error: 'Error verificando el número en WhatsApp'

@@ -52,6 +52,12 @@ services:
       POSTGRES_SSL: "false"
       DB_SYNC: ${DB_SYNC:-false}
       JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-8h}
+      # Administrador inicial: solo se usa si la tabla de usuarios esta vacia.
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      # Vacio = sin CORS (el frontend va por el mismo origen via Caddy).
+      CORS_ORIGIN: ${CORS_ORIGIN:-}
       REDIS_HOST: redis
       REDIS_PORT: 6379
       HOST_WEBSOCKET: ""
@@ -60,7 +66,6 @@ services:
     volumes:
       - ./data/sesiones:/app/sesiones
       - ./data/static:/app/static
-      - ./data/backups:/app/backups
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3005/api/health || exit 1"]
       interval: 15s

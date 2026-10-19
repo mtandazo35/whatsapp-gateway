@@ -1,6 +1,15 @@
-import { BadRequestException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
-import { CreateUserDto } from './dto/create-user.dto';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  OnModuleInit,
+  UnauthorizedException,
+} from '@nestjs/common';
+import { CreateUserDto, Rol } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { UpdateProfileDto } from './dto/update-profile.dto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { User } from './entities/user.entity';
 import { Repository } from 'typeorm';
@@ -9,9 +18,14 @@ import { PaginationDto } from 'src/common';
 import { JwtService } from '@nestjs/jwt';
 import { JwtPayload } from './interfaces/jwt-payload.interface';
 import { LoginUserDto } from './dto/login-user.dto';
+import { AuthUser } from './interfaces/auth-user.interface';
+
+const BCRYPT_ROUNDS = 10;
 
 @Injectable()
-export class UserService {
+export class UserService implements OnModuleInit {
+
+  private readonly logger = new Logger(UserService.name)
 
   constructor(
     @InjectRepository( User )
@@ -19,60 +33,97 @@ export class UserService {
     private readonly jwtService: JwtService
   ){}
 
+  /**
+   * Primer arranque: si no hay usuarios y ADMIN_EMAIL/ADMIN_PASSWORD estan en el
+   * entorno, crea el SUPER_ADMIN inicial. Sin esto nadie podria entrar, porque el
+   * alta de usuarios exige estar autenticado como administrador.
+   */
+  async onModuleInit() {
+    try {
+      const total = await this.userRepository.count({ withDeleted: true })
+      if (total > 0) return
+
+      const email = process.env.ADMIN_EMAIL?.trim()
+      const password = process.env.ADMIN_PASSWORD
+
+      if (!email || !password) {
+        this.logger.warn('No hay usuarios y faltan ADMIN_EMAIL / ADMIN_PASSWORD: nadie podrá iniciar sesión')
+        return
+      }
+
+      await this.userRepository.save(this.userRepository.create({
+        email,
+        usuario: 'admin',
+        rol: Rol.SUPER_ADMIN,
+        password: await bcrypt.hash(password, BCRYPT_ROUNDS),
+      }))
+      this.logger.log(`Usuario SUPER_ADMIN inicial creado: ${email}`)
+    } catch (error) {
+      this.logger.error(`No se pudo crear el administrador inicial: ${error?.message}`)
+    }
+  }
+
   async signJWT(payload: JwtPayload) {
     return this.jwtService.sign(payload)
   }
 
   async login(user: LoginUserDto) {
-    try {
+    const userFound = await this.userRepository.findOne({
+      where: { email: user.email.trim().toLowerCase() }
+    });
 
-      const userFound = await this.userRepository.findOne({
-        where: { email: user.email }
-      });
+    // Mismo mensaje exista o no el usuario, para no revelar correos registrados.
+    const credencialesMalas = new UnauthorizedException('Usuario o contraseña incorrectos')
 
-      if (!userFound) {
-        throw new Error('Usuario o contraseña incorrectos')
-      }
+    if (!userFound) throw credencialesMalas
 
-      if ( !bcrypt.compareSync( user.password.trim(), userFound.password) )
-        throw new UnauthorizedException('Usuario o contraseña incorrectos')
+    const ok = await bcrypt.compare(user.password.trim(), userFound.password)
+    if (!ok) throw credencialesMalas
 
-      const {
-        password,
-        ...restUser
-      } = userFound;
+    if (!userFound.isActive) {
+      throw new UnauthorizedException('Usuario desactivado')
+    }
 
-      return {
-        ...restUser,
-        token: await this.signJWT({
-          id: userFound.id
-        })
-      }
+    const { password: _, ...restUser } = userFound;
 
-    } catch (error) {
-      throw new BadRequestException(error.message)
+    return {
+      ...restUser,
+      token: await this.signJWT({ id: userFound.id })
     }
   }
 
-  async create(createUserDto: CreateUserDto) {
-    try {
+  /** Solo SUPER_ADMIN puede otorgar SUPER_ADMIN; ADMIN puede dar ADMIN o USUARIO. */
+  private assertCanAssignRole(actor: AuthUser, rol: Rol | undefined) {
+    if (rol === Rol.SUPER_ADMIN && actor.rol !== Rol.SUPER_ADMIN) {
+      throw new ForbiddenException('Solo un SUPER_ADMIN puede asignar el rol SUPER_ADMIN')
+    }
+  }
 
+  /** Un ADMIN no puede tocar a un SUPER_ADMIN. */
+  private assertCanManage(actor: AuthUser, target: User) {
+    if (target.rol === Rol.SUPER_ADMIN && actor.rol !== Rol.SUPER_ADMIN) {
+      throw new ForbiddenException('No puedes modificar a un SUPER_ADMIN')
+    }
+  }
+
+  async create(createUserDto: CreateUserDto, actor: AuthUser) {
+    this.assertCanAssignRole(actor, createUserDto.rol)
+
+    try {
       const userCreate = this.userRepository.create({
         ...createUserDto,
-        password: bcrypt.hashSync( createUserDto.password, 10 ),
+        email: createUserDto.email.trim().toLowerCase(),
+        rol: createUserDto.rol ?? Rol.USUARIO,
+        password: await bcrypt.hash(createUserDto.password, BCRYPT_ROUNDS),
       })
 
-      const user =  await this.userRepository.save(userCreate)
+      const user = await this.userRepository.save(userCreate)
       const { password: _, ...rest } = user;
 
-      return {
-        user: rest,
-        token: await this.signJWT({
-          id: rest.id
-        })
-      }
+      // El alta la hace un administrador: no se devuelve token del usuario creado.
+      return rest
     } catch (error) {
-      if (error.message.includes('duplicate key value violates unique constraint')) {
+      if (error.message?.includes('duplicate key value violates unique constraint')) {
         throw new BadRequestException(`Ya existe un usuario con este email ${ createUserDto.email }`)
       }
 
@@ -82,7 +133,7 @@ export class UserService {
 
   async findAll(paginationDto: PaginationDto) {
     const page = paginationDto.page || 1;
-    const limit = paginationDto.limit || 10;
+    const limit = Math.min(paginationDto.limit || 10, 100);
 
     const totalPages = await this.userRepository.count();
     const lastPage = Math.ceil(totalPages / limit);
@@ -117,24 +168,38 @@ export class UserService {
     const user = await this.userRepository.findOneBy({ id });
 
     if (!user)
-      throw new BadRequestException(`No se encontró al usuario con el id ${ id }`)
+      throw new NotFoundException(`No se encontró al usuario con el id ${ id }`)
 
     const { password: _, ...rest } = user;
     return rest;
   }
 
-  async update(id: string, updateUserDto: UpdateUserDto) {
+  async update(id: string, updateUserDto: UpdateUserDto, actor: AuthUser) {
+    const target = await this.userRepository.findOneBy({ id });
+    if (!target)
+      throw new NotFoundException(`No se encontró al usuario con el id ${ id }`)
+
+    this.assertCanManage(actor, target)
+    this.assertCanAssignRole(actor, updateUserDto.rol)
+
+    if (id === actor.id && (updateUserDto.isActive === false || (updateUserDto.rol && updateUserDto.rol !== actor.rol))) {
+      throw new BadRequestException('No puedes desactivarte ni cambiar tu propio rol')
+    }
+
     try {
-      await this.findOne(id as unknown as string);
+      const cambios: Partial<User> = { ...updateUserDto }
 
-      if ( updateUserDto.password )
-        updateUserDto.password = bcrypt.hashSync( updateUserDto.password, 10 )
+      if (updateUserDto.password)
+        cambios.password = await bcrypt.hash(updateUserDto.password, BCRYPT_ROUNDS)
 
-      await this.userRepository.update(id, updateUserDto);
+      if (updateUserDto.email)
+        cambios.email = updateUserDto.email.trim().toLowerCase()
+
+      await this.userRepository.update(id, cambios);
 
       return `Registro editado`;
     } catch (error) {
-      if (error.message.includes('duplicate key value violates unique constraint')) {
+      if (error.message?.includes('duplicate key value violates unique constraint')) {
         throw new BadRequestException(`Ya existe un usuario con este email ${ updateUserDto.email }`)
       }
 
@@ -142,21 +207,52 @@ export class UserService {
     }
   }
 
-  async remove(id: string) {
+  async updateProfile(userId: string, dto: UpdateProfileDto) {
+    try {
+      const cambios: Partial<User> = { ...dto }
+
+      if (dto.password)
+        cambios.password = await bcrypt.hash(dto.password, BCRYPT_ROUNDS)
+
+      if (dto.email)
+        cambios.email = dto.email.trim().toLowerCase()
+
+      await this.userRepository.update(userId, cambios);
+      return this.findOne(userId)
+    } catch (error) {
+      if (error.message?.includes('duplicate key value violates unique constraint')) {
+        throw new BadRequestException(`Ya existe un usuario con este email ${ dto.email }`)
+      }
+
+      throw new BadRequestException(error.message)
+    }
+  }
+
+  async remove(id: string, actor: AuthUser) {
+    if (id === actor.id) {
+      throw new BadRequestException('No puedes eliminar tu propio usuario')
+    }
+
+    const target = await this.userRepository.findOneBy({ id });
+    if (!target) {
+      throw new NotFoundException(`Usuario con ID ${id} no encontrado`);
+    }
+    this.assertCanManage(actor, target)
+
     const result = await this.userRepository.softDelete(id);
 
     if (result.affected === 0) {
-      throw new NotFoundException(`Usuario con ID ${id} no encontrada`);
+      throw new NotFoundException(`Usuario con ID ${id} no encontrado`);
     }
 
-    return `Usuario con #${id} removida`;
+    return `Usuario con #${id} removido`;
   }
 
   async restore(id: string): Promise<void> {
     const result = await this.userRepository.restore(id);
 
     if (result.affected === 0) {
-      throw new NotFoundException(`Usuario con ID ${id} no encontrada o no estaba eliminada`);
+      throw new NotFoundException(`Usuario con ID ${id} no encontrado o no estaba eliminado`);
     }
   }
 }

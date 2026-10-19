@@ -9,6 +9,18 @@
         max_size 25MB
     }
 
+    # Cabeceras de seguridad para el frontend y la API.
+    # CSP: scripts solo propios y de jsdelivr (Bootstrap); estilos inline los
+    # necesita Bootstrap; imagenes data: para el QR y el favicon.
+    header {
+        Content-Security-Policy "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; font-src 'self' https://cdn.jsdelivr.net; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "no-referrer"
+        Permissions-Policy "camera=(), microphone=(), geolocation=()"
+        -Server
+    }
+
     # API NestJS por reverse proxy
     handle /api/* {
         reverse_proxy api:3005 {

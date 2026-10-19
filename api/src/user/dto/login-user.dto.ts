@@ -1,4 +1,4 @@
-import { IsEmail, IsNotEmpty, IsStrongPassword } from "class-validator";
+import { IsEmail, IsNotEmpty, IsString, MaxLength } from "class-validator";
 
 export class LoginUserDto {
 
@@ -6,8 +6,11 @@ export class LoginUserDto {
   @IsEmail()
   email: string;
 
+  // En el login no se valida la fortaleza: eso es cosa del alta. Aqui solo
+  // importa que venga algo razonable para comparar con el hash.
   @IsNotEmpty()
-  @IsStrongPassword({}, { message: "La contraseña no es lo suficientemente segura." })
+  @IsString()
+  @MaxLength(128)
   password: string;
 
 }

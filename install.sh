@@ -7,7 +7,7 @@
 # Que hace:
 #   1. Pide el dominio (si no esta en .env).
 #   2. Instala Docker + compose plugin si faltan.
-#   3. Genera .env con secretos aleatorios si no existe.
+#   3. Genera .env con secretos aleatorios si no existe (incluye el admin inicial).
 #   4. Levanta postgres + redis + api + web (Caddy con SSL automatico).
 #   5. Espera a que la API responda.
 #
@@ -30,6 +30,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 COMPOSE_PROJECT="whatsapp-gateway"
+ADMIN_GENERADO=0
+
+# Contraseña que cumple la politica de la API (8+, mayuscula, minuscula, numero, simbolo).
+gen_admin_password() {
+  echo "Wa$(openssl rand -hex 10)!"
+}
 
 # =============== 1. DOMINIO ===============
 hdr "Configurando dominio"
@@ -105,6 +111,9 @@ if [ ! -f .env ]; then
   log "Generando .env con secretos aleatorios..."
   POSTGRES_PASSWORD="$(openssl rand -hex 16)"
   JWT_SECRET="$(openssl rand -hex 32)"
+  ADMIN_EMAIL="admin@${DOMAIN}"
+  ADMIN_PASSWORD="$(gen_admin_password)"
+  ADMIN_GENERADO=1
   cat > .env <<EOF
 DOMAIN=${DOMAIN}
 
@@ -115,6 +124,14 @@ POSTGRES_DB=whatsapp
 DB_SYNC=true
 
 JWT_SECRET=${JWT_SECRET}
+JWT_EXPIRES_IN=8h
+
+# Administrador inicial (solo se usa si la tabla de usuarios esta vacia)
+ADMIN_EMAIL=${ADMIN_EMAIL}
+ADMIN_PASSWORD=${ADMIN_PASSWORD}
+
+# Origenes CORS permitidos (vacio = desactivado; el frontend va por el mismo dominio)
+CORS_ORIGIN=
 
 # Webhook saliente opcional (mensajes entrantes + estado de sesion/mensajes)
 WEBHOOK_URL=
@@ -133,13 +150,29 @@ else
   else
     echo "DOMAIN=${DOMAIN}" >> .env
   fi
-  log ".env ya existe, actualizando solo DOMAIN"
+
+  # Instalaciones anteriores a la autenticacion: añadir el admin inicial si falta.
+  if ! grep -q "^ADMIN_EMAIL=" .env; then
+    ADMIN_EMAIL="admin@${DOMAIN}"
+    ADMIN_PASSWORD="$(gen_admin_password)"
+    ADMIN_GENERADO=1
+    {
+      echo
+      echo "# Administrador inicial (solo se usa si la tabla de usuarios esta vacia)"
+      echo "ADMIN_EMAIL=${ADMIN_EMAIL}"
+      echo "ADMIN_PASSWORD=${ADMIN_PASSWORD}"
+    } >> .env
+    log "Añadidos ADMIN_EMAIL / ADMIN_PASSWORD a .env"
+  fi
+
+  log ".env ya existe, actualizando solo lo necesario"
 fi
 
 # =============== 4. CARPETAS DE DATOS ===============
 mkdir -p data/sesiones data/static data/backups
 # UID 1000 (node) dentro del container
-chown -R 1000:1000 data/sesiones data/static data/backups || true
+chown -R 1000:1000 data/sesiones data/static || true
+chmod 700 data/backups || true
 
 # =============== 5. CHEQUEO DE PUERTOS ===============
 hdr "Verificando puertos 80/443"
@@ -219,6 +252,15 @@ log "  Frontend:        https://${DOMAIN}/"
 log "  API:             https://${DOMAIN}/api"
 log "  Health:          https://${DOMAIN}/api/health"
 log "  Compose project: ${COMPOSE_PROJECT}"
+echo
+if [ "$ADMIN_GENERADO" = "1" ]; then
+  log "  Usuario inicial: ${ADMIN_EMAIL}"
+  log "  Contraseña:      ${ADMIN_PASSWORD}"
+  warn "  Guarda la contraseña y cambiala tras el primer login (PATCH /api/user/me)."
+  warn "  Si la BD ya tenia usuarios, estas credenciales NO se aplican."
+else
+  log "  Usuario inicial: ver ADMIN_EMAIL / ADMIN_PASSWORD en .env (solo valen si la BD estaba vacia)"
+fi
 echo
 log "  Logs API:        docker compose -p ${COMPOSE_PROJECT} logs -f api"
 log "  Logs web/Caddy:  docker compose -p ${COMPOSE_PROJECT} logs -f web"

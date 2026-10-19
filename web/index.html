@@ -14,11 +14,15 @@
 <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
   <div class="container-fluid">
     <span class="navbar-brand"><i class="bi bi-whatsapp text-success"></i> WhatsApp Gateway</span>
-    <span id="sessionBadge" class="badge bg-secondary">cargando...</span>
+    <div class="d-flex align-items-center gap-2">
+      <span id="sessionBadge" class="badge bg-secondary">cargando...</span>
+      <span id="userBadge" class="badge bg-light text-dark d-none"></span>
+      <button class="btn btn-sm btn-outline-light d-none" id="btnLogout" title="Cerrar sesión de usuario"><i class="bi bi-box-arrow-right"></i></button>
+    </div>
   </div>
 </nav>
 
-<div class="container py-4">
+<div class="container py-4" id="app">
 
   <ul class="nav nav-tabs mb-3" role="tablist">
     <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-session"><i class="bi bi-link-45deg"></i> Sesion</button></li>
@@ -47,8 +51,8 @@
               <div class="alert alert-info mb-0">
                 <small>
                   Solo necesitas escanear UNA vez. La sesion queda guardada y se reconecta sola al reiniciar
-                  el servicio. El servidor consume de la API por loopback (sin pasar por internet) si lo deployas
-                  en la misma maquina.
+                  el servicio. Las integraciones llaman a la API con el token de <code>/api/user/login</code>
+                  en la cabecera <code>Authorization: Bearer</code>.
                 </small>
               </div>
             </div>
@@ -70,7 +74,7 @@
               </div>
               <div class="col-md-8">
                 <label class="form-label">Mensaje</label>
-                <textarea class="form-control" id="textMessage" rows="3" required></textarea>
+                <textarea class="form-control" id="textMessage" rows="3" maxlength="4096" required></textarea>
               </div>
             </div>
             <div class="form-check mt-2">
@@ -101,13 +105,13 @@
                     <input type="text" class="form-control" id="mediaFileNumber" placeholder="593987654321" required>
                   </div>
                   <div class="col-md-8">
-                    <label class="form-label">Archivos</label>
+                    <label class="form-label">Archivos (max 10, 25 MB cada uno)</label>
                     <input type="file" class="form-control" id="mediaFileFiles" multiple required>
                   </div>
                 </div>
                 <div class="mt-2">
                   <label class="form-label">Caption (opcional)</label>
-                  <input type="text" class="form-control" id="mediaFileCaption">
+                  <input type="text" class="form-control" id="mediaFileCaption" maxlength="1024">
                 </div>
                 <button class="btn btn-primary mt-3" type="submit"><i class="bi bi-cloud-upload"></i> Subir y enviar</button>
               </form>
@@ -120,13 +124,13 @@
                     <input type="text" class="form-control" id="mediaUrlNumber" placeholder="593987654321" required>
                   </div>
                   <div class="col-md-8">
-                    <label class="form-label">URL del archivo</label>
+                    <label class="form-label">URL publica del archivo (http/https, sin redirecciones)</label>
                     <input type="url" class="form-control" id="mediaUrlUrl" placeholder="https://..." required>
                   </div>
                 </div>
                 <div class="mt-2">
                   <label class="form-label">Caption (opcional)</label>
-                  <input type="text" class="form-control" id="mediaUrlCaption">
+                  <input type="text" class="form-control" id="mediaUrlCaption" maxlength="1024">
                 </div>
                 <button class="btn btn-primary mt-3" type="submit"><i class="bi bi-link"></i> Enviar desde URL</button>
               </form>
@@ -174,6 +178,33 @@
       </div>
     </div>
 
+  </div>
+</div>
+
+<!-- MODAL LOGIN -->
+<div class="modal fade" id="modalLogin" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
+  <div class="modal-dialog modal-dialog-centered modal-sm">
+    <div class="modal-content">
+      <div class="modal-header bg-dark text-white">
+        <h5 class="modal-title"><i class="bi bi-shield-lock"></i> Iniciar sesion</h5>
+      </div>
+      <form id="formLogin">
+        <div class="modal-body">
+          <div class="mb-2">
+            <label class="form-label">Correo</label>
+            <input type="email" class="form-control" id="loginEmail" autocomplete="username" required>
+          </div>
+          <div class="mb-2">
+            <label class="form-label">Contraseña</label>
+            <input type="password" class="form-control" id="loginPassword" autocomplete="current-password" required>
+          </div>
+          <div class="text-danger small d-none" id="loginError"></div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-primary w-100" type="submit" id="btnLogin">Entrar</button>
+        </div>
+      </form>
+    </div>
   </div>
 </div>
 

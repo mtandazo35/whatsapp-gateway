@@ -1,10 +1,12 @@
 import { PartialType } from '@nestjs/mapped-types';
 import { CreateUserDto } from './create-user.dto';
-import { IsOptional } from 'class-validator';
+import { IsBoolean, IsOptional } from 'class-validator';
 
+/** Edicion administrativa: incluye rol e isActive. Solo ADMIN / SUPER_ADMIN. */
 export class UpdateUserDto extends PartialType(CreateUserDto) {
 
   @IsOptional()
-  isActive: boolean
+  @IsBoolean()
+  isActive?: boolean
 
 }

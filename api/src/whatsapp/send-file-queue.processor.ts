@@ -8,36 +8,43 @@ import { Process, Processor } from '@nestjs/bull';
 import { MessagesService } from 'src/messages/messages.service';
 import { BadRequestException, Logger } from '@nestjs/common';
 import { WhatsappSessionManager } from './whatsapp-session-manager';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Session } from 'src/session/entities/session.entity';
-import { Repository } from 'typeorm';
+import { assertSafeUrl } from './utils/url-guard';
 
+/** Límites de tamaño por tipo (MB), alineados con lo que acepta WhatsApp. */
+const SIZE_LIMITS_MB: Record<string, number> = {
+  image: 16,
+  video: 64,
+  audio: 16,
+  document: 100,
+}
+
+/**
+ * Worker de envíos. Contrato con la API:
+ *  - cada job trae messageId: la fila ya existe en estado queued
+ *  - al enviar con éxito -> markSent(waMessageId); lo que pase DESPUÉS del envío
+ *    (presencia, borrar archivo) nunca hace fallar el job, para no reintentar y
+ *    duplicar un mensaje que WhatsApp ya aceptó
+ *  - si falla antes de enviar: se relanza para que Bull reintente; solo en el
+ *    último intento se marca failed y se borra el archivo
+ *  - los reintentos los gestiona Bull (attempts/backoff); aquí no hay bucles
+ *    internos de reintento, que multiplicaban los envíos
+ */
 @Processor('send-file')
 export class SendFileQueueProcessor {
 
+  private readonly logger = new Logger(SendFileQueueProcessor.name)
+
   constructor(
-    @InjectRepository(Session)
-    private readonly sessionRepository: Repository<Session>,
     private readonly messageService: MessagesService,
     private readonly whatsAppSessionManager: WhatsappSessionManager
   ) {}
 
-  /**
-   * Obtiene el JID correcto (PN o LID) para enviar mensajes
-   * En v7, WhatsApp puede usar LIDs en lugar de números de teléfono
-   */
   private getRecipientJid(number: string): string {
-    // Limpiamos el número (eliminar espacios, guiones, etc)
     const cleanNumber = number.replace(/[^0-9]/g, '');
-
-    // Formato estándar de WhatsApp (PN - Phone Number)
     return `${cleanNumber}@s.whatsapp.net`;
   }
 
-  /**
-   * Valida que el socket esté disponible y conectado
-   */
-  private async validateSocket(sessionId: string) {
+  private validateSocket(sessionId: string) {
     const sock = this.whatsAppSessionManager.getSocket(sessionId);
 
     if (!sock) {
@@ -53,17 +60,47 @@ export class SendFileQueueProcessor {
     return sock;
   }
 
+  private isLastAttempt(job: Job): boolean {
+    const attempts = job.opts?.attempts ?? 1
+    return job.attemptsMade + 1 >= attempts
+  }
+
+  /** La presencia es cosmética: nunca debe hacer fallar un envío. */
+  private async presence(sock: any, ...args: any[]) {
+    try {
+      await sock.sendPresenceUpdate(...args)
+    } catch (error) {
+      this.logger.debug(`sendPresenceUpdate falló: ${error?.message}`)
+    }
+  }
+
+  private async onFailure(job: Job, messageId: string, error: any, filePath?: string) {
+    if (this.isLastAttempt(job)) {
+      await this.messageService.markFailed(messageId, error).catch(e =>
+        this.logger.warn(`no se pudo marcar failed ${messageId}: ${e?.message}`))
+      if (filePath) await fs.remove(filePath).catch(() => undefined)
+    } else {
+      this.logger.warn(`[${job.data?.sessionId}] job ${job.id} falló (intento ${job.attemptsMade + 1}), se reintentará: ${error?.message}`)
+    }
+  }
+
+  private async onSuccess(messageId: string, sent: any) {
+    const waMessageId: string | undefined = sent?.key?.id
+    try {
+      await this.messageService.markSent(messageId, waMessageId)
+    } catch (error) {
+      // El mensaje SÍ salió. Se registra y no se relanza: relanzar duplicaría el envío.
+      this.logger.error(`mensaje ${messageId} enviado (wa ${waMessageId}) pero no se pudo registrar: ${error?.message}`)
+    }
+    return { messageId, waMessageId }
+  }
+
   @Process('sendMessageText')
   async sendMessageText(job: Job) {
-    const {
-      message,
-      number,
-      sessionId,
-      fastMode = false
-    } = job.data;
+    const { messageId, message, number, sessionId, fastMode = false } = job.data;
 
     try {
-      const sock = await this.validateSocket(sessionId);
+      const sock = this.validateSocket(sessionId);
       const recipientJid = this.getRecipientJid(number);
 
       let sent: any
@@ -73,398 +110,193 @@ export class SendFileQueueProcessor {
         sent = await this.sendMessageWithTypingSimulation(sock, recipientJid, message);
       }
 
-      // ✅ Crear registro del mensaje con id de WhatsApp para tracking
-      return await this.messageService.create(
-        { message, session: sessionId, receptor: number },
-        true,
-        { waMessageId: sent?.key?.id },
-      );
+      const resultado = await this.onSuccess(messageId, sent)
+      await this.presence(sock, 'available')
+      return resultado
 
     } catch (error) {
-      // Manejo de error
-      const session = await this.sessionRepository.findOneBy({ sessionId });
-      if (session) {
-        await this.messageService.create({
-          message,
-          session,
-          receptor: number
-        });
-      }
+      await this.onFailure(job, messageId, error)
       throw new BadRequestException(`Error al enviar mensaje: ${error.message}`);
     }
   }
 
-  // ✅ Método auxiliar para modo normal con simulaciones
-  private async sendMessageWithTypingSimulation(
-    sock: any,
-    recipientJid: string,
-    message: string
-  ): Promise<any> {
+  private async sendMessageWithTypingSimulation(sock: any, recipientJid: string, message: string): Promise<any> {
     const typingTime = this.calculateTypingTime(message);
-    await sock.sendPresenceUpdate('composing', recipientJid);
+    await this.presence(sock, 'composing', recipientJid);
     await this.delay(typingTime);
-    await sock.sendPresenceUpdate('paused', recipientJid);
+    await this.presence(sock, 'paused', recipientJid);
     await this.delay(this.getRandomDelay(500, 1500));
-    const sent = await sock.sendMessage(recipientJid, { text: message });
-    await sock.sendPresenceUpdate('available');
-    return sent;
+    return await sock.sendMessage(recipientJid, { text: message });
   }
 
   @Process('sendMessageFile')
   async sendMessageFile(job: Job) {
-    const {
-      caption,
-      number,
-      sessionId,
-      path,
-      mimetype,
-      originalname
-    } = job.data;
+    const { messageId, caption, number, sessionId, path, mimetype, originalname } = job.data;
 
     try {
-      const sock = await this.validateSocket(sessionId);
-      const session = await this.sessionRepository.findOneBy({ sessionId });
+      const sock = this.validateSocket(sessionId);
 
-      if (!session) {
-        throw new BadRequestException(`Sesión ${sessionId} no encontrada en BD`);
-      }
-
-      // Verificar que el archivo existe
-      if (!fs.existsSync(path)) {
+      if (!path || !(await fs.pathExists(path))) {
         throw new BadRequestException(`Archivo no encontrado: ${path}`);
       }
 
-      // ✅ 1. Pausa inicial (como si estuviera seleccionando el archivo)
       await this.delay(this.getRandomDelay(1000, 1700));
-
-      // ✅ 2. Indicar que está disponible/activo
-      await sock.sendPresenceUpdate('available');
+      await this.presence(sock, 'available');
       await this.delay(this.getRandomDelay(500, 1000));
 
-      const type = mimetype.split('/')[0];
-      const fileBuffer = fs.readFileSync(path);
+      const type = String(mimetype ?? '').split('/')[0];
+      const fileBuffer = await fs.readFile(path);
       const recipientJid = this.getRecipientJid(number);
 
-      // ✅ 3. Validar tamaño del archivo
       this.validateFileSize(fileBuffer, type);
 
-      let configMedia: any = {};
+      const configMedia = await this.buildMedia(type, fileBuffer, {
+        mimetype,
+        fileName: originalname,
+        caption,
+      })
 
-      if (!['image', 'video', 'audio'].includes(type)) {
-        configMedia = {
-          mimetype: mimetype,
-          fileName: originalname,
-          document: fileBuffer,
-          caption: caption || ''
-        };
-      }
+      await this.simulateBeforeSend(sock, recipientJid, type, caption, configMedia)
 
-      if (type === 'image') {
-        // ✅ 4. Comprimir imagen si es necesaria
-        const compressedBuffer = await this.compressImageIfNeeded(fileBuffer);
+      const sent = await sock.sendMessage(recipientJid, configMedia);
 
-        configMedia = {
-          image: compressedBuffer,
-          caption: caption || ''
-        };
-      }
-
-      if (type === 'audio') {
-        configMedia = {
-          audio: fileBuffer,
-          mimetype: 'audio/mp4',
-          ptt: false
-        };
-      }
-
-      if (type === 'video') {
-        configMedia = {
-          video: fileBuffer,
-          caption: caption || ''
-        };
-      }
-
-      // ✅ 5. Simular comportamiento según el tipo de archivo
-      if (type === 'audio') {
-        // Simular que está "grabando" para audios
-        await sock.sendPresenceUpdate('recording', recipientJid);
-        await this.delay(this.getRandomDelay(2000, 5000));
-      } else {
-        // Para otros tipos, si hay caption simular que está escribiendo
-        if (caption) {
-          await sock.sendPresenceUpdate('composing', recipientJid);
-          const typingTime = this.calculateTypingTime(caption);
-          await this.delay(typingTime);
-        }
-      }
-
-      // ✅ 6. Simular tiempo de "subida" del archivo
-      const uploadTime = this.calculateUploadTime(type, configMedia);
-      await this.delay(uploadTime);
-
-      // ✅ 7. Pausar brevemente antes de enviar
-      await sock.sendPresenceUpdate('paused', recipientJid);
-      await this.delay(this.getRandomDelay(500, 1500));
-
-      // ✅ 8. Enviar mensaje con retry
-      const sent = await this.sendWithRetry(sock, recipientJid, configMedia);
-
-      // ✅ 9. Volver a estado disponible
-      await sock.sendPresenceUpdate('available');
-
-      // Limpiar archivo después de enviar
-      if (fs.existsSync(path)) {
-        fs.unlinkSync(path);
-      }
-
-      return await this.messageService.create(
-        { message: originalname, session, receptor: number },
-        true,
-        { waMessageId: sent?.key?.id },
-      );
+      const resultado = await this.onSuccess(messageId, sent)
+      await this.presence(sock, 'available')
+      await fs.remove(path).catch(() => undefined)
+      return resultado
 
     } catch (error) {
-      const session = await this.sessionRepository.findOneBy({ sessionId });
-      if (session) {
-        await this.messageService.create({
-          message: path,
-          session,
-          receptor: number
-        }, false);
-      }
-
-      // Limpiar archivo en caso de error también
-      if (path && fs.existsSync(path)) {
-        try {
-          fs.unlinkSync(path);
-        } catch (unlinkError) {
-          console.error('Error al eliminar archivo:', unlinkError);
-        }
-      }
-
+      await this.onFailure(job, messageId, error, path)
       throw new BadRequestException(`Fallo al enviar el archivo: ${error.message}`);
     }
   }
 
   @Process('sendMessageUrl')
   async sendMessageUrl(job: Job) {
-    const { caption, number, sessionId, mediaUrl, type } = job.data;
+    const { messageId, caption, number, sessionId, mediaUrl, type, contentType } = job.data;
 
     try {
-      const sock = await this.validateSocket(sessionId);
-      const session = await this.sessionRepository.findOneBy({ sessionId });
-
-      if (!session) {
-        throw new BadRequestException(`Sesión ${sessionId} no encontrada en BD`);
-      }
-
+      const sock = this.validateSocket(sessionId);
       const recipientJid = this.getRecipientJid(number);
 
-      // ✅ Pausa inicial
+      // Se vuelve a validar aquí: el DNS pudo cambiar entre la API y el worker.
+      await assertSafeUrl(mediaUrl)
+
       await this.delay(this.getRandomDelay(1500, 3000));
-      await sock.sendPresenceUpdate('available');
+      await this.presence(sock, 'available');
 
-      let configMedia: any = {};
-      let fileBuffer: Buffer | null = null;
+      const limitMb = SIZE_LIMITS_MB[type] ?? SIZE_LIMITS_MB.document
+      const response = await axios.get(mediaUrl, {
+        responseType: 'arraybuffer',
+        timeout: 30000,
+        maxRedirects: 0,
+        maxContentLength: limitMb * 1024 * 1024,
+        maxBodyLength: limitMb * 1024 * 1024,
+        headers: { 'User-Agent': 'whatsapp-gateway/1.0' },
+        validateStatus: s => s >= 200 && s < 300,
+      });
 
-      // Descargar y preparar el archivo
-      if (!['image', 'video', 'audio'].includes(type)) {
-        const response = await axios.get(mediaUrl, {
-          responseType: 'arraybuffer',
-          timeout: 30000
-        });
+      const fileBuffer = Buffer.from(response.data);
+      this.validateFileSize(fileBuffer, type);
 
-        fileBuffer = Buffer.from(response.data);
+      const pathname = new URL(mediaUrl).pathname;
+      const cleanName = basename(pathname) || 'archivo';
+      const mimeType = response.headers['content-type']?.split(';')[0].trim()
+        || contentType
+        || mime.lookup(cleanName)
+        || 'application/octet-stream';
 
-        // ✅ Validar tamaño
-        this.validateFileSize(fileBuffer, type);
+      const configMedia = await this.buildMedia(type, fileBuffer, {
+        mimetype: mimeType,
+        fileName: cleanName,
+        caption,
+      })
 
-        const urlObj = new URL(mediaUrl);
-        const pathname = urlObj.pathname;
-        const rawName = basename(pathname);
-        const cleanName = rawName.split('?')[0];
+      await this.simulateBeforeSend(sock, recipientJid, type, caption, configMedia)
 
-        let mimeType = response.headers['content-type']?.split(';')[0].trim()
-          || mime.lookup(cleanName)
-          || 'application/octet-stream';
+      const sent = await sock.sendMessage(recipientJid, configMedia);
 
-        configMedia = {
-          mimetype: mimeType,
-          fileName: cleanName,
-          document: fileBuffer,
-          caption: caption || ''
-        };
-      } else if (type === 'image') {
-        // Descargar imagen para validar/comprimir
-        const response = await axios.get(mediaUrl, {
-          responseType: 'arraybuffer',
-          timeout: 30000
-        });
-
-        fileBuffer = Buffer.from(response.data);
-
-        // ✅ Comprimir si es muy grande
-        const compressedBuffer = await this.compressImageIfNeeded(fileBuffer);
-
-        configMedia = {
-          image: compressedBuffer,
-          caption: caption || ''
-        };
-      } else if (type === 'audio') {
-        configMedia = {
-          audio: { url: mediaUrl },
-          mimetype: 'audio/mp4',
-          ptt: false
-        };
-      } else if (type === 'video') {
-        configMedia = {
-          video: { url: mediaUrl },
-          caption: caption || ''
-        };
-      }
-
-      // ✅ Simular comportamiento según tipo
-      if (type === 'audio') {
-        await sock.sendPresenceUpdate('recording', recipientJid);
-        await this.delay(this.getRandomDelay(2000, 5000));
-      } else {
-        if (caption) {
-          await sock.sendPresenceUpdate('composing', recipientJid);
-          const typingTime = this.calculateTypingTime(caption);
-          await this.delay(typingTime);
-        }
-      }
-
-      // ✅ Simular tiempo de subida
-      const uploadTime = this.calculateUploadTime(type, configMedia);
-      await this.delay(uploadTime);
-
-      // ✅ Pausa antes de enviar
-      await sock.sendPresenceUpdate('paused', recipientJid);
-      await this.delay(this.getRandomDelay(500, 1500));
-
-      // ✅ Enviar con retry
-      const sent = await this.sendWithRetry(sock, recipientJid, configMedia);
-
-      await sock.sendPresenceUpdate('available');
-
-      return await this.messageService.create(
-        { message: mediaUrl, session, receptor: number },
-        true,
-        { waMessageId: sent?.key?.id },
-      );
+      const resultado = await this.onSuccess(messageId, sent)
+      await this.presence(sock, 'available')
+      return resultado
 
     } catch (error) {
-      const session = await this.sessionRepository.findOneBy({ sessionId });
-      if (session) {
-        await this.messageService.create({
-          message: mediaUrl,
-          session,
-          receptor: number
-        }, false);
-      }
-
+      await this.onFailure(job, messageId, error)
       throw new BadRequestException(`Fallo al enviar multimedia: ${error.message}`);
     }
   }
 
-  /**
-   * Calcula tiempo de tipeo basado en la longitud del mensaje
-   * Simula velocidad de escritura humana (40-60 palabras por minuto)
-   */
+  // ---------- helpers ----------
+
+  private async buildMedia(
+    type: string,
+    fileBuffer: Buffer,
+    meta: { mimetype: string; fileName: string; caption?: string },
+  ): Promise<any> {
+    if (type === 'image') {
+      return { image: await this.compressImageIfNeeded(fileBuffer), caption: meta.caption || '' }
+    }
+    if (type === 'audio') {
+      return { audio: fileBuffer, mimetype: 'audio/mp4', ptt: false }
+    }
+    if (type === 'video') {
+      return { video: fileBuffer, caption: meta.caption || '' }
+    }
+    return {
+      mimetype: meta.mimetype,
+      fileName: meta.fileName,
+      document: fileBuffer,
+      caption: meta.caption || '',
+    }
+  }
+
+  private async simulateBeforeSend(sock: any, recipientJid: string, type: string, caption: string | undefined, configMedia: any) {
+    if (type === 'audio') {
+      await this.presence(sock, 'recording', recipientJid);
+      await this.delay(this.getRandomDelay(2000, 5000));
+    } else if (caption) {
+      await this.presence(sock, 'composing', recipientJid);
+      await this.delay(this.calculateTypingTime(caption));
+    }
+
+    await this.delay(this.calculateUploadTime(type, configMedia));
+    await this.presence(sock, 'paused', recipientJid);
+    await this.delay(this.getRandomDelay(500, 1500));
+  }
+
+  /** Simula velocidad de escritura humana (40-60 ppm), entre 2 y 15 s. */
   private calculateTypingTime(message: string): number {
-    const MIN_WPM = 40; // palabras por minuto mínimo
-    const MAX_WPM = 60; // palabras por minuto máximo
-
-    // Estimar palabras (aproximadamente 5 caracteres por palabra)
     const wordCount = message.length / 5;
-
-    // Velocidad aleatoria entre min y max WPM
-    const wpm = this.getRandomDelay(MIN_WPM, MAX_WPM);
-
-    // Convertir a milisegundos
+    const wpm = this.getRandomDelay(40, 60);
     const timeInMs = (wordCount / wpm) * 60 * 1000;
-
-    // Límites razonables: mínimo 2s, máximo 15s
     return Math.min(Math.max(timeInMs, 2000), 15000);
   }
 
-  /**
-   * Genera un delay aleatorio entre min y max (en milisegundos)
-   */
   private getRandomDelay(min: number, max: number): number {
     return Math.floor(Math.random() * (max - min + 1)) + min;
   }
 
-  /**
-   * Helper para delays con Promises
-   */
   private delay(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   private calculateUploadTime(type: string, configMedia: any): number {
-    let baseTime = 2000; // 2 segundos base
-
     switch (type) {
-      case 'image':
-        baseTime = this.getRandomDelay(2000, 4000); // 2-4s
-        break;
-
-      case 'video':
-        baseTime = this.getRandomDelay(5000, 10000); // 5-10s
-        break;
-
-      case 'audio':
-        baseTime = this.getRandomDelay(2000, 5000); // 2-5s
-        break;
-
-      default: // documentos
-        // Estimar por tamaño si está disponible
-        if (configMedia.document) {
+      case 'image': return this.getRandomDelay(2000, 4000);
+      case 'video': return this.getRandomDelay(5000, 10000);
+      case 'audio': return this.getRandomDelay(2000, 5000);
+      default:
+        if (configMedia?.document) {
           const sizeInMB = configMedia.document.length / (1024 * 1024);
-          // ~1 segundo por MB, con mínimo de 2s y máximo de 15s
-          baseTime = Math.min(Math.max(sizeInMB * 1000, 2000), 15000);
-        } else {
-          baseTime = this.getRandomDelay(3000, 8000); // 3-8s
+          return Math.min(Math.max(sizeInMB * 1000, 2000), 15000);
         }
-        break;
-    }
-
-    return baseTime;
-  }
-
-  private async sendWithRetry(
-    sock: any,
-    recipientJid: string,
-    configMedia: any,
-    maxRetries: number = 3
-  ): Promise<any> {
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        return await sock.sendMessage(recipientJid, configMedia);
-      } catch (error) {
-        if (attempt === maxRetries) throw error;
-
-        // Backoff exponencial: 2s, 4s, 8s
-        const backoffTime = Math.pow(2, attempt) * 1000;
-        console.log(`Reintento ${attempt}/${maxRetries} después de ${backoffTime}ms`);
-        await this.delay(backoffTime);
-      }
+        return this.getRandomDelay(3000, 8000);
     }
   }
 
   private validateFileSize(buffer: Buffer, type: string): void {
     const sizeInMB = buffer.length / (1024 * 1024);
-
-    const limits = {
-      image: 16, // 16 MB
-      video: 64, // 64 MB
-      audio: 16, // 16 MB
-      document: 100 // 100 MB
-    };
-
-    const maxSize = limits[type] || limits.document;
+    const maxSize = SIZE_LIMITS_MB[type] ?? SIZE_LIMITS_MB.document;
 
     if (sizeInMB > maxSize) {
       throw new BadRequestException(
@@ -477,23 +309,18 @@ export class SendFileQueueProcessor {
     const sizeInKB = buffer.length / 1024;
 
     if (sizeInKB <= maxSizeKB) {
-      return buffer; // No necesita compresión
+      return buffer;
     }
 
-    // Usar sharp para comprimir (instalar: npm install sharp)
+    // sharp es dependencia directa (package.json); se carga aquí para no pagar el arranque si no hay imágenes.
     const sharp = require('sharp');
 
     let quality = 80;
-    let compressed = await sharp(buffer)
-      .jpeg({ quality })
-      .toBuffer();
+    let compressed = await sharp(buffer).jpeg({ quality }).toBuffer();
 
-    // Reducir calidad hasta alcanzar el tamaño deseado
     while (compressed.length / 1024 > maxSizeKB && quality > 20) {
       quality -= 10;
-      compressed = await sharp(buffer)
-        .jpeg({ quality })
-        .toBuffer();
+      compressed = await sharp(buffer).jpeg({ quality }).toBuffer();
     }
 
     return compressed;

@@ -1,6 +1,7 @@
 import * as fs from 'fs-extra';
 import * as path from 'path';
 
+/** Borra TODO el contenido de una carpeta (credenciales de una sesión cerrada). */
 export async function deleteFilesInFolder(carpeta: string) {
   const exists = await fs.pathExists(carpeta);
   if (!exists) return;
@@ -13,62 +14,39 @@ export async function deleteFilesInFolder(carpeta: string) {
   }
 }
 
-export async function getFileTypeWithValidation(url) {
-  try {
-    // 1. Hacemos una petición HEAD (más eficiente que GET para solo verificar)
-    const response = await fetch(url, {
-      method: 'HEAD',
-      mode: 'no-cors', // Intenta evitar CORS, pero no siempre funciona
-      redirect: 'follow'
-    });
+/**
+ * Borra solo los archivos con antigüedad mayor a maxAgeMs. Es lo que usa la
+ * limpieza diaria de static/: los archivos recién subidos pueden estar en cola.
+ * Devuelve cuántos borró.
+ */
+export async function deleteOldFilesInFolder(carpeta: string, maxAgeMs: number): Promise<number> {
+  const exists = await fs.pathExists(carpeta);
+  if (!exists) return 0;
 
-    // 2. Verificamos si la URL es válida (códigos 2xx = éxito)
-    if (!response.ok) {
-      throw new Error(`La URL no es válida (HTTP ${response.status})`);
+  const limite = Date.now() - maxAgeMs;
+  const archivos = await fs.readdir(carpeta);
+  let borrados = 0;
+
+  for (const archivo of archivos) {
+    const ruta = path.join(carpeta, archivo);
+    try {
+      const stat = await fs.stat(ruta);
+      if (stat.mtimeMs < limite) {
+        await fs.remove(ruta);
+        borrados++;
+      }
+    } catch {
+      // ya no existe o no se puede leer: se ignora
     }
+  }
 
-    // 3. Obtenemos el tipo desde Content-Type (método más confiable)
-    const contentType = response.headers.get('Content-Type');
-    if (contentType) {
-      if (contentType.includes('image/')) return { type: 'image', isValid: true };
-      if (contentType.includes('audio/')) return { type: 'audio', isValid: true };
-      if (contentType.includes('video/')) return { type: 'video', isValid: true };
-      if (contentType === 'application/pdf') return { type: 'pdf', isValid: true };
-      if (contentType.includes('xml')) return { type: 'xml', isValid: true };
-    }
+  return borrados;
+}
 
-    // 4. Si no hay Content-Type, intentamos con la extensión en la URL
-    const typeFromUrl = getFileTypeFromUrl(url);
-    if (typeFromUrl !== 'unknown') {
-      return { type: typeFromUrl, isValid: true };
-    }
-
-    // 5. Si no se pudo determinar, pero la URL es válida
-    return { type: 'unknown', isValid: true };
-
-  } catch (error) {
-    return {
-      type: 'unknown',
-      isValid: false,
-      error: error.message
-    };
+/** Borra una lista de rutas sin lanzar (limpieza de subidas rechazadas). */
+export async function removeQuietly(rutas: (string | undefined | null)[]): Promise<void> {
+  for (const ruta of rutas) {
+    if (!ruta) continue;
+    try { await fs.remove(ruta) } catch { /* noop */ }
   }
 }
-
-// Función auxiliar para extraer tipo desde la URL (como antes)
-function getFileTypeFromUrl(url) {
-  const extension = url.split('.').pop().split(/[#?]/)[0].toLowerCase();
-  const imageExts = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'];
-  const audioExts = ['mp3', 'wav', 'ogg', 'aac'];
-  const videoExts = ['mp4', 'webm', 'avi', 'mov', 'mkv'];
-
-  if (imageExts.includes(extension)) return 'image';
-  if (audioExts.includes(extension)) return 'audio';
-  if (videoExts.includes(extension)) return 'video';
-  if (extension === 'pdf') return 'pdf';
-  if (extension === 'xml') return 'xml';
-
-  return 'unknown';
-}
-
-// await fs.remove(authPath)  --> borrar completamente

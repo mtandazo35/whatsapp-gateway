@@ -13,8 +13,17 @@ async function loadBaileysHelpers() {
   return baileysHelpers
 }
 
+/**
+ * Reenvía mensajes entrantes al webhook.
+ *
+ * Se eliminaron las ramas de ejemplo de Baileys que, ante los textos literales
+ * "requestPlaceholder" y "onDemandHistSync", pedían reenvíos de placeholder y
+ * sincronización de historial. Las ejecutaba cualquier contacto y son justo el
+ * vector de GHSA-qvv5-jq5g-4cgg. Si algún día hace falta resincronizar, debe
+ * ser una operación administrativa autenticada, no una reacción a un texto.
+ */
 export async function handleMessagesUpsert(
-  sock: any,
+  _sock: any,
   upsert: any,
   sessionId: string,
   webhook: WebhookService,
@@ -22,8 +31,15 @@ export async function handleMessagesUpsert(
   try {
     if (upsert.type !== 'notify') return
 
+    // Mitigación recomendada por el aviso: el gateway no solicita historial bajo
+    // demanda, así que un upsert con requestId no es nuestro y se descarta.
+    if (upsert.requestId) {
+      logger.warn(`[${sessionId}] upsert con requestId inesperado descartado`)
+      return
+    }
+
     for (const msg of upsert.messages) {
-      await processMessage(sock, msg, upsert, sessionId, webhook)
+      await processMessage(msg, sessionId, webhook)
     }
   } catch (error) {
     logger.error(`[${sessionId}] Error en handleMessagesUpsert:`, error)
@@ -31,12 +47,18 @@ export async function handleMessagesUpsert(
 }
 
 async function processMessage(
-  sock: any,
   msg: any,
-  upsert: any,
   sessionId: string,
   webhook: WebhookService,
 ): Promise<void> {
+  const remoteJid: string = msg.key?.remoteJid ?? ''
+  const fromMe: boolean = msg.key?.fromMe ?? false
+
+  if (fromMe) return
+
+  const { isJidNewsletter } = await loadBaileysHelpers()
+  if (isJidNewsletter(remoteJid)) return
+
   const text =
     msg.message?.conversation ||
     msg.message?.extendedTextMessage?.text ||
@@ -44,26 +66,6 @@ async function processMessage(
     msg.message?.videoMessage?.caption ||
     msg.message?.documentMessage?.caption ||
     null
-
-  const remoteJid: string = msg.key?.remoteJid ?? ''
-  const fromMe: boolean = msg.key?.fromMe ?? false
-
-  if (text === 'requestPlaceholder' && !upsert.requestId) {
-    const messageId = await sock.requestPlaceholderResend(msg.key)
-    logger.debug(`[${sessionId}] requested placeholder resync id: ${messageId}`)
-    return
-  }
-
-  if (text === 'onDemandHistSync') {
-    const messageId = await sock.fetchMessageHistory(50, msg.key, msg.messageTimestamp!)
-    logger.debug(`[${sessionId}] requested on-demand history resync id: ${messageId}`)
-    return
-  }
-
-  if (fromMe) return
-
-  const { isJidNewsletter } = await loadBaileysHelpers()
-  if (isJidNewsletter(remoteJid)) return
 
   const number = remoteJid.split('@')[0]?.split(':')[0] ?? ''
   const messageType = Object.keys(msg.message ?? {})[0] ?? 'unknown'

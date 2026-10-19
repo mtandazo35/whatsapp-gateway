@@ -1,5 +1,6 @@
 import { Message } from "src/messages/entities/message.entity";
-import { Column, CreateDateColumn, DeleteDateColumn, Entity, OneToMany, PrimaryGeneratedColumn, UpdateDateColumn } from "typeorm";
+import { User } from "src/user/entities/user.entity";
+import { Column, CreateDateColumn, DeleteDateColumn, Entity, JoinColumn, ManyToOne, OneToMany, PrimaryGeneratedColumn, UpdateDateColumn } from "typeorm";
 
 @Entity('sessions')
 export class Session {
@@ -9,7 +10,16 @@ export class Session {
   @OneToMany(() => Message, (message) => message.session )
   messages: Message[]
 
-  @Column({ type: 'text' })
+  /**
+   * Dueño de la sesión. Los no administradores solo ven y usan sus sesiones.
+   * Nullable para no romper filas anteriores a este campo (quedan solo para admins).
+   */
+  @ManyToOne(() => User, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'owner_id' })
+  owner: User | null;
+
+  /** Identificador público corto (12 hex). Es el que usan la API y la carpeta de credenciales. */
+  @Column({ type: 'text', unique: true })
   sessionId: string;
 
   @Column({ type: 'text' })
