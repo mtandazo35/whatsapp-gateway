@@ -203,7 +203,14 @@ chmod 700 data/backups || true
 
 # =============== 5. CHEQUEO DE PUERTOS ===============
 hdr "Verificando puertos 80/443"
-for p in 80 443; do
+# Si el propio proyecto ya esta levantado (re-deploy), es Caddy quien escucha: no es conflicto.
+if docker compose -p "$COMPOSE_PROJECT" ps --status running --services 2>/dev/null | grep -qx web; then
+  log "El contenedor web de ${COMPOSE_PROJECT} ya escucha en 80/443 (re-deploy)"
+  PUERTOS=""
+else
+  PUERTOS="80 443"
+fi
+for p in $PUERTOS; do
   if ss -tln | awk '{print $4}' | grep -qE ":${p}$"; then
     HOLDER="$(ss -tlnp 2>/dev/null | awk -v p=":${p}$" '$4 ~ p {print $NF; exit}')"
     warn "Puerto ${p} ya esta en uso por: ${HOLDER}"

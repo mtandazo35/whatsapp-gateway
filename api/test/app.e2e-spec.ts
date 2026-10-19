@@ -44,6 +44,18 @@ describe('API (e2e)', () => {
       .expect(401);
   });
 
+  it('POST /api/user/login limita a 10 intentos por minuto (429)', async () => {
+    const codes: number[] = [];
+    for (let i = 0; i < 12; i++) {
+      const r = await request(app.getHttpServer())
+        .post('/api/user/login')
+        .send({ email: 'nadie@prueba.local', password: 'Mala.Clave1' });
+      codes.push(r.status);
+    }
+    expect(codes.filter(c => c === 401).length).toBe(10);
+    expect(codes.slice(10)).toEqual([429, 429]);
+  });
+
   it('POST /api/user (alta) exige token (401)', () => {
     return request(app.getHttpServer())
       .post('/api/user')

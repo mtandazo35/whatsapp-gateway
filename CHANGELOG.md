@@ -3,6 +3,33 @@
 Formato: una entrada por versión con lo que cambia para quien opera o integra el gateway.
 La versión está en `api/package.json`.
 
+## 0.2.0 — 2026-10-19
+
+Primer bloque P1 de la auditoría: rate limiting y migraciones. Sin cambios en el contrato
+de la API salvo las respuestas 429.
+
+### Requiere al actualizar
+
+- Nada manual. Al arrancar, la API aplica la migración `EsquemaInicial`, que es idempotente:
+  sobre una base creada con `DB_SYNC=true` solo añade lo que falte; sobre una vacía crea todo.
+- `DB_SYNC` pasa a `false` por defecto en `.env` nuevos. En `.env` existentes puedes dejarlo
+  en `false` ya.
+
+### Añadido
+
+- **Rate limit por IP** con `@nestjs/throttler`: 600 peticiones/min en general,
+  10 logins/min y 120 envíos/min. Configurable con `RATE_LIMIT_*_PER_MIN`. Responde 429
+  con cabeceras `X-RateLimit-*`. `/health` y `/ready` quedan fuera. La API confía en un
+  salto de proxy (Caddy) para leer la IP real.
+- **Migraciones TypeORM** en `api/src/database/migrations`, aplicadas al arrancar
+  (`DB_MIGRATIONS=true`). Scripts `npm run migration:generate --name=Nombre`,
+  `migration:run`, `migration:revert`, `migration:show`.
+- Índice compuesto `messages(session_id, created_at)` para el historial.
+- `package-lock.json` regenerado: Baileys 7.0.0-rc14, throttler 6.7.1, sharp 0.33.5, axios
+  1.20.0; desaparece el árbol de `baileys` 6.x.
+- `install.sh` ya no se queja de los puertos 80/443 cuando quien escucha es su propio Caddy
+  (re-deploy con el stack levantado).
+
 ## 0.1.0 — 2026-10-19
 
 Cierra el bloque P0 de la auditoría del 2026-10-19. **Rompe compatibilidad** con las

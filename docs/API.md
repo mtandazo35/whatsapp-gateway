@@ -33,6 +33,7 @@ cualquier carácter no numérico y exige entre 10 y 15 dígitos.
 | 403 | Rol insuficiente o sesión de otro usuario | `{ "statusCode": 403, "message": "No tienes acceso a esta sesión" }` |
 | 404 | Recurso inexistente (o mensaje de otro usuario) | `{ "statusCode": 404, "message": "..." }` |
 | 413 | Cuerpo mayor de 25 MB (lo corta Caddy) | texto plano |
+| 429 | Rate limit por IP: 10 logins/min, 120 envíos/min, 600 peticiones/min en total | `{ "statusCode": 429, "message": "Demasiadas peticiones, espera un momento" }` + `Retry-After` |
 | 503 | `/ready` con BD o Redis caídos | `{ "status": "degraded", "checks": { "db": "ok", "redis": "fail" } }` |
 
 Los errores de validación (`ValidationPipe` con `whitelist` y `forbidNonWhitelisted`)

@@ -49,9 +49,9 @@ administrador inicial**. Se crean solo si la tabla `users` está vacía. Primer 
 entrar: cambiar la contraseña con `PATCH /api/user/me` y crear los usuarios que hagan falta
 con `POST /api/user`.
 
-Después del primer arranque pon `DB_SYNC=false` en `.env` y reinicia la API. Con `true`,
-TypeORM altera las tablas al vuelo cada vez que cambia una entidad; en producción eso puede
-borrar columnas.
+El esquema lo crea la API al arrancar aplicando las migraciones de
+`api/src/database/migrations` (tabla `migrations` en Postgres). `DB_SYNC` debe quedarse en
+`false`: con `true` TypeORM altera las tablas al vuelo y puede borrar columnas.
 
 ## Actualizar
 
@@ -62,14 +62,26 @@ git pull
 sudo bash install.sh                   # reconstruye imágenes y levanta
 ```
 
-Si el cambio trae columnas nuevas (lo dice el `CHANGELOG.md`), arranca una vez con
-`DB_SYNC=true` y vuelve a `false`.
+Las migraciones pendientes se aplican solas al arrancar la API. Para ver cuáles están
+aplicadas:
+
+```bash
+docker compose -p whatsapp-gateway exec postgres psql -U whatsapp -d whatsapp -c 'SELECT name, timestamp FROM migrations'
+```
+
+Para crear una migración nueva tras cambiar una entidad (en desarrollo, con la BD alcanzable):
+
+```bash
+cd api && npm run migration:generate --name=NombreDelCambio   # genera src/database/migrations/<ts>-NombreDelCambio.ts
+npm run migration:show                                          # [X] aplicadas, [ ] pendientes
+```
 
 ### Desde una versión sin autenticación (anterior a 0.1.0)
 
 1. `install.sh` añade `ADMIN_EMAIL` / `ADMIN_PASSWORD` al `.env` existente y los imprime.
-2. Arranca con `DB_SYNC=true`: nuevas `sessions.owner_id`, `messages.last_error`, índice en
-   `wa_message_id` y restricción única en `sessionId`.
+2. Arranca normal: la migración `EsquemaInicial` añade `sessions.owner_id`,
+   `messages.last_error`, el índice en `wa_message_id` y la restricción única en `sessionId`
+   sobre las tablas que ya existían. Deja `DB_SYNC=false`.
 3. Si `users` ya tenía filas, el admin inicial **no** se crea. Entra con un usuario
    existente. Si ninguno es administrador, promuévelo en la BD:
    ```bash
@@ -131,6 +143,8 @@ docker compose -p whatsapp-gateway exec redis redis-cli KEYS 'bull:send-file:*' 
 | Síntoma | Dónde mirar |
 |---|---|
 | 401 en todo | Token caducado (8 h) o usuario desactivado. `logs api` no lo registra; es el guard. |
+| 429 `Demasiadas peticiones` | Rate limit por IP: 10 logins/min, 120 envíos/min, 600 en total. Cabecera `Retry-After`. Si varias integraciones salen por la misma IP, sube `RATE_LIMIT_SEND_PER_MIN`. |
+| La API no arranca tras actualizar y el log dice `migration` | Una migración falló. `logs api` muestra el SQL; la BD queda como estaba (cada migración va en transacción). |
 | 403 en una sesión | No eres dueño ni admin. `GET /session/:id` como admin muestra `owner`. |
 | `Sesión no está conectada (estado: connecting)` | Esperar 15 s tras el QR. Si persiste: `logs api \| grep -E "Conectado\|Desconectado\|Reintento"`. |
 | `Socket no disponible` | La sesión no se arrancó desde el último reinicio. Pedir el QR la levanta; si tiene credenciales conecta sin escanear. |

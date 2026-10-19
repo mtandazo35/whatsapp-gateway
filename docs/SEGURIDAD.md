@@ -117,10 +117,19 @@ porque el gateway nunca los solicita.
 - Los logs no imprimen contraseñas ni tokens. Sí imprimen números de teléfono de remitentes
   (`Mensaje entrante de 5939...`): trátalos como dato personal.
 
+## Rate limiting
+
+`@nestjs/throttler` como guard global, por IP de origen y por minuto: 600 peticiones en
+general, 10 en `POST /user/login`, 120 en los tres endpoints de envío. `/health` y `/ready`
+quedan fuera. Responde 429 con `Retry-After` y `X-RateLimit-*`. Los contadores viven en
+memoria del proceso: se reinician con la API y no se comparten entre réplicas.
+
+La API confía en **un** salto de proxy (`trust proxy = 1`) para tomar la IP de
+`X-Forwarded-For`; es Caddy, en la misma red de compose. Si pones otro proxy delante
+(Cloudflare), sube `TRUST_PROXY_HOPS` o el límite se aplicará a la IP del proxy.
+
 ## Lo que este modelo no cubre
 
-- **Rate limiting** de login y de envíos: no hay. Ponlo en Caddy o en un WAF delante si la
-  API es pública.
 - **Rotación de `JWT_SECRET`** invalida todos los tokens; no hay versión de token por usuario.
 - **Auditoría de acciones** (quién envió qué): el historial guarda la sesión, no el usuario
   que pidió el envío.

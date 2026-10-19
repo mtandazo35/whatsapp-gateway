@@ -54,8 +54,8 @@ El instalador:
 
 Modo no interactivo: `DOMAIN=wa.miempresa.com sudo -E bash install.sh`.
 
-Tras el primer arranque pon `DB_SYNC=false` en `.env` y reinicia la API
-(`docker compose -p whatsapp-gateway restart api`). Detalles en [docs/OPERACION.md](docs/OPERACION.md#primer-arranque).
+El esquema de la base lo crean y actualizan las migraciones al arrancar; no hay que tocar
+`DB_SYNC`. Detalles en [docs/OPERACION.md](docs/OPERACION.md#primer-arranque).
 
 ## Primeros pasos
 
@@ -127,8 +127,9 @@ es la regla, aunque conozca el `sessionId`.
 
 Las URLs que el gateway descarga se validan contra redes internas y redirecciones; las
 subidas se guardan con nombre UUID y límites; el frontend escapa todo lo que viene de la
-API y Caddy impone CSP. Lo que no cubre (rate limiting, rotación de secreto, bloqueo del
-número por WhatsApp) está escrito en [docs/SEGURIDAD.md](docs/SEGURIDAD.md#lo-que-este-modelo-no-cubre).
+API y Caddy impone CSP. El login admite 10 intentos por minuto y IP, los envíos 120. Lo que
+no cubre (rotación de secreto, auditoría por usuario, bloqueo del número por WhatsApp) está
+escrito en [docs/SEGURIDAD.md](docs/SEGURIDAD.md#lo-que-este-modelo-no-cubre).
 
 ## Webhook saliente
 
@@ -142,7 +143,9 @@ apertura o cierre de sesión. Formato y verificación en [docs/API.md](docs/API.
 |---|---|
 | `DOMAIN` | Dominio público. **Requerido.** |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | BD interna (las genera el instalador). |
-| `DB_SYNC` | `true` solo en el primer arranque y cuando el CHANGELOG lo pida. |
+| `DB_SYNC` | `false`. Solo `true` en desarrollo: altera tablas al vuelo. |
+| `DB_MIGRATIONS` | `true`: aplica las migraciones pendientes al arrancar. |
+| `RATE_LIMIT_GLOBAL_PER_MIN` / `_LOGIN_` / `_SEND_` | Peticiones por IP y minuto (600 / 10 / 120). |
 | `JWT_SECRET` | Mínimo 32 caracteres. Sin él la API no arranca. |
 | `JWT_EXPIRES_IN` | Vida del token (`8h`). |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Administrador inicial; solo con la tabla de usuarios vacía. |
@@ -178,6 +181,7 @@ Estructura:
 
 ```
 api/src/
+├── database/    data-source de TypeORM y migraciones versionadas
 ├── user/        usuarios, login, AuthGuard global, roles
 ├── session/     sesiones de WhatsApp (con dueño)
 ├── messages/    historial y estados de envío
@@ -192,14 +196,15 @@ scripts/         backup.sh
 
 La auditoría del 2026-10-19 (20 hallazgos) tiene cerrado el bloque P0: autenticación y roles,
 Baileys parcheado, registro fiel de envíos, respuesta `queued`, aislamiento de subidas,
-anti-SSRF, XSS y CSP. Sigue pendiente, por orden:
+anti-SSRF, XSS y CSP. Del P1 están hechos migraciones y rate limiting. Sigue pendiente, por orden:
 
-1. Migraciones versionadas en lugar de `DB_SYNC`.
-2. Webhooks con cola persistente (hoy los reintentos viven en memoria).
-3. Idempotencia con hash del cuerpo y para multimedia; outbox transaccional.
-4. Que desactivar o borrar una sesión desde el CRUD cierre también el socket.
-5. Respaldos fuera del host, cifrados y con restauración ensayada.
-6. CI con build, pruebas y `npm audit`; `npm ci` en el Dockerfile; TypeScript estricto.
+1. Webhooks con cola persistente (hoy los reintentos viven en memoria).
+2. Idempotencia con hash del cuerpo y para multimedia; barrido de mensajes `queued` huérfanos.
+3. Que desactivar o borrar una sesión desde el CRUD cierre también el socket.
+4. Respaldos fuera del host, cifrados y con restauración ensayada.
+5. CI con build, pruebas y `npm audit`; `npm ci` en el Dockerfile; TypeScript estricto.
+
+Hecho en 0.2.0: migraciones versionadas y rate limiting (ver `CHANGELOG.md`).
 
 ## Licencia
 
