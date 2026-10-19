@@ -1,4 +1,5 @@
 import { Session } from "src/session/entities/session.entity";
+import { User } from "src/user/entities/user.entity";
 import { Column, CreateDateColumn, DeleteDateColumn, Entity, Index, JoinColumn, ManyToOne, PrimaryGeneratedColumn, UpdateDateColumn } from "typeorm";
 
 /**
@@ -13,6 +14,9 @@ import { Column, CreateDateColumn, DeleteDateColumn, Entity, Index, JoinColumn, 
  */
 export type MessageStatus = 'queued' | 'sent' | 'delivered' | 'read' | 'played' | 'failed' | 'error' | 'pending' | string;
 
+/** text: mensaje de texto; media_url: archivo descargado de una URL; file: archivo subido por multipart. */
+export type MessageKind = 'text' | 'media_url' | 'file';
+
 @Entity('messages')
 export class Message {
 
@@ -23,8 +27,23 @@ export class Message {
   @JoinColumn({ name: 'session_id' })
   session: Session;
 
+  /** Usuario que pidió el envío (auditoría). Null en filas anteriores a 0.3.0. */
+  @ManyToOne(() => User, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'requested_by' })
+  requestedBy: User | null;
+
+  /** Texto, URL del archivo o nombre original del archivo subido, según kind. */
   @Column({ type: 'text' })
   message: string;
+
+  @Column({ type: 'varchar', length: 16, default: 'text' })
+  kind: MessageKind;
+
+  @Column({ type: 'text', nullable: true })
+  caption: string | null;
+
+  @Column({ type: 'boolean', default: false, name: 'fast_mode' })
+  fastMode: boolean;
 
   @Column({ type: 'text', nullable: true })
   receptor: string;

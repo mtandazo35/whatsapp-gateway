@@ -9,13 +9,15 @@ import { PaginationDto } from 'src/common';
 import { isUUID } from 'class-validator';
 import { AuthUser, isAdmin } from 'src/user/interfaces/auth-user.interface';
 import { User } from 'src/user/entities/user.entity';
+import { SessionEventsService } from './session-events.service';
 
 @Injectable()
 export class SessionService {
 
   constructor(
     @InjectRepository( Session )
-    private readonly sesionRepository: Repository<Session>
+    private readonly sesionRepository: Repository<Session>,
+    private readonly events: SessionEventsService,
   ){}
 
   /** Consulta base: trae el dueño solo con id y email (nunca el hash de contraseña). */
@@ -150,6 +152,11 @@ export class SessionService {
 
     await this.sesionRepository.update(session.id, updateSessionDto);
 
+    // Desactivar debe parar la sesión de verdad: socket, jobs en cola y credenciales.
+    if (updateSessionDto.isActive === false && session.isActive) {
+      this.events.emitDeactivated(session.sessionId);
+    }
+
     return `Registro editado`;
   }
 
@@ -161,6 +168,8 @@ export class SessionService {
     if (result.affected === 0) {
       throw new NotFoundException(`Sesión con ID ${id} no encontrada`);
     }
+
+    this.events.emitDeleted(session.sessionId);
 
     return `Sesión con #${id} removida`;
   }

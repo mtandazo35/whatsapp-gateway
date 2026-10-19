@@ -69,9 +69,14 @@ services:
       HOST_WEBSOCKET: ""
       WEBHOOK_URL: ${WEBHOOK_URL:-}
       WEBHOOK_SECRET: ${WEBHOOK_SECRET:-}
+      # true solo si el receptor del webhook esta en tu red y va por http
+      WEBHOOK_ALLOW_HTTP: ${WEBHOOK_ALLOW_HTTP:-false}
     volumes:
       - ./data/sesiones:/app/sesiones
       - ./data/static:/app/static
+    # Permite apuntar WEBHOOK_URL a un servicio del propio host (host.docker.internal)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3005/api/health || exit 1"]
       interval: 15s

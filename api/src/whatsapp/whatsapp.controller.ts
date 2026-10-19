@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Body,
+  ConflictException,
   Controller,
   DefaultValuePipe,
   Delete,
@@ -9,6 +10,7 @@ import {
   HttpCode,
   Param,
   ParseBoolPipe,
+  ParseUUIDPipe,
   Post,
   Query,
   UploadedFiles,
@@ -23,16 +25,18 @@ import { fileNamer } from './helpers/fileNamer.helper';
 import { SendMediaUrlDto } from './dto/send-media-url.dto';
 import { SendMediaDto } from './dto/send-media.dto';
 import { SessionService } from 'src/session/session.service';
-import { IdempotencyService } from './idempotency.service';
+import { hashPayload, IdempotencyService } from './idempotency.service';
 import { GetUser } from 'src/user/decorators';
 import { AuthUser } from 'src/user/interfaces/auth-user.interface';
 import { Session } from 'src/session/entities/session.entity';
 import { removeQuietly } from './utils/files-utils';
 import { ThrottleSend } from 'src/common/rate-limit';
+import { MessagesService } from 'src/messages/messages.service';
 
 /** Límites de subida por petición (Caddy además corta el cuerpo en 25 MB). */
 export const UPLOAD_MAX_FILES = 10
 export const UPLOAD_MAX_FILE_BYTES = 25 * 1024 * 1024
+const IDEM_KEY_MAX = 128
 
 /**
  * Todas las rutas exigen token (guard global) y comprueban que el usuario sea
@@ -47,6 +51,7 @@ export class WhatsappController {
   constructor(
     private readonly whatsappService: WhatsappService,
     private readonly sessionService: SessionService,
+    private readonly messagesService: MessagesService,
     private readonly idempotency: IdempotencyService,
   ) {}
 
@@ -66,6 +71,42 @@ export class WhatsappController {
       throw new BadRequestException(`Número inválido: ${raw}`);
     }
     return number
+  }
+
+  /**
+   * Ejecuta `accion` bajo una Idempotency-Key opcional:
+   *  - misma clave y mismo cuerpo -> respuesta cacheada (o 'duplicate' si sigue en curso)
+   *  - misma clave y otro cuerpo  -> 409
+   */
+  private async conIdempotencia<T>(
+    sessionId: string,
+    rawKey: string | undefined,
+    payload: Record<string, any>,
+    accion: () => Promise<T>,
+  ): Promise<T | { status: string; message: string }> {
+    const idemKey = rawKey?.trim()
+    if (!idemKey) return accion()
+    if (idemKey.length > IDEM_KEY_MAX) throw new BadRequestException(`Idempotency-Key demasiado larga (máximo ${IDEM_KEY_MAX})`)
+
+    const key = `${sessionId}:${idemKey}`
+    const hash = hashPayload(payload)
+    const check = await this.idempotency.checkAndReserve(key, hash)
+
+    if (check.status === 'conflict')
+      throw new ConflictException('Esta Idempotency-Key ya se usó con otro cuerpo; usa una clave nueva')
+    if (check.status === 'pending')
+      return { status: 'duplicate', message: 'Petición ya en proceso con la misma Idempotency-Key' }
+    if (check.status === 'done')
+      return check.response
+
+    try {
+      const response = await accion()
+      await this.idempotency.store(key, hash, response)
+      return response
+    } catch (err) {
+      await this.idempotency.release(key)
+      throw err
+    }
   }
 
   @Get('/qr/:sessionId')
@@ -117,53 +158,42 @@ export class WhatsappController {
     const session = await this.sessionLista(sessionId, actor)
     const number = this.numeroLimpio(data.number)
 
-    const idemKey = idempotencyKey?.trim()
-    if (idemKey) {
-      const cached = await this.idempotency.checkAndReserve(`${sessionId}:${idemKey}`)
-      if (cached !== null) {
-        if (cached === 'pending') {
-          return { status: 'duplicate', message: 'Petición ya en proceso con la misma Idempotency-Key' }
-        }
-        try { return JSON.parse(cached) } catch { /* fall through */ }
-      }
-    }
-
-    try {
-      const { messageId, jobId } = await this.whatsappService.sendMessage(session, number, message, fastMode)
-
-      const response = {
+    return this.conIdempotencia(sessionId, idempotencyKey, { sessionId, number, message, fastMode }, async () => {
+      const { messageId, jobId } = await this.whatsappService.sendMessage(session, number, message, fastMode, actor.id)
+      return {
         status: 'queued',
         message: `Mensaje aceptado para ${number}; consulta /api/messages/${messageId} para ver el estado`,
         messageId,
         jobId,
       }
-      if (idemKey) await this.idempotency.store(`${sessionId}:${idemKey}`, response)
-      return response
-    } catch (err) {
-      if (idemKey) await this.idempotency.release(`${sessionId}:${idemKey}`)
-      throw err
-    }
+    })
   }
 
   @ThrottleSend()
   @Post('/send-media/url')
   @HttpCode(202)
-  async sendMediaFromUrl(@Body() body: SendMediaUrlDto, @GetUser() actor: AuthUser) {
+  async sendMediaFromUrl(
+    @Body() body: SendMediaUrlDto,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
+    @GetUser() actor: AuthUser,
+  ) {
     const { sessionId, mediaUrl, caption } = body;
 
     const session = await this.sessionLista(sessionId, actor)
     const number = this.numeroLimpio(body.number)
 
-    const { messageId, jobId } = await this.whatsappService.sendMediaMessage(session, number, mediaUrl, caption)
-
-    return {
-      status: 'queued',
-      message: 'El archivo se encuentra en cola de envío',
-      messageId,
-      jobId,
-    }
+    return this.conIdempotencia(sessionId, idempotencyKey, { sessionId, number, mediaUrl, caption: caption ?? '' }, async () => {
+      const { messageId, jobId } = await this.whatsappService.sendMediaMessage(session, number, mediaUrl, caption, actor.id)
+      return {
+        status: 'queued',
+        message: 'El archivo se encuentra en cola de envío',
+        messageId,
+        jobId,
+      }
+    })
   }
 
+  @ThrottleSend()
   @UseInterceptors(FileFieldsInterceptor([
     { name: 'files', maxCount: UPLOAD_MAX_FILES }
   ],
@@ -182,7 +212,6 @@ export class WhatsappController {
       })
     }
   ))
-  @ThrottleSend()
   @Post('/send-media/file')
   @HttpCode(202)
   async sendMediaFromFile(
@@ -203,7 +232,7 @@ export class WhatsappController {
       const session = await this.sessionLista(sessionId, actor)
       const number = this.numeroLimpio(body.number)
 
-      const queued = await this.whatsappService.sendMediaFiles(session, number, subidos, caption)
+      const queued = await this.whatsappService.sendMediaFiles(session, number, subidos, caption, actor.id)
 
       return {
         status: 'queued',
@@ -216,12 +245,23 @@ export class WhatsappController {
     }
   }
 
+  /** Reintenta un mensaje failed (texto o URL). Crea un mensaje nuevo; el fallido queda en el historial. */
+  @ThrottleSend()
+  @Post('/messages/:id/retry')
+  @HttpCode(202)
+  async retry(@Param('id', ParseUUIDPipe) id: string, @GetUser() actor: AuthUser) {
+    const original = await this.messagesService.findOne(id, actor)
+    const session = await this.sessionLista(original.session.sessionId, actor)
+    const { messageId, jobId } = await this.whatsappService.retry(original, session, actor.id)
+    return { status: 'queued', message: `Reintento encolado; consulta /api/messages/${messageId}`, messageId, jobId, retryOf: id }
+  }
+
   @Delete('/session/:sessionId')
   async closeSession(@Param('sessionId') sessionId: string, @GetUser() actor: AuthUser) {
     await this.sessionService.findSessionForUser(sessionId, actor);
 
-    const result = await this.whatsappService.logoutSession(sessionId)
-    return { status: 'ok', sessionId, result }
+    const result = await this.whatsappService.cancelSession(sessionId, 'sesión cerrada por el usuario')
+    return { status: 'ok', sessionId, result: { status: 'closed', ...result } }
   }
 
   @Get('session/:sessionId/info')

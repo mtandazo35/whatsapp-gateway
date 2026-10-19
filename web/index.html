@@ -14,7 +14,9 @@
 <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
   <div class="container-fluid">
     <span class="navbar-brand"><i class="bi bi-whatsapp text-success"></i> WhatsApp Gateway</span>
-    <div class="d-flex align-items-center gap-2">
+    <div class="d-flex align-items-center gap-2 flex-wrap">
+      <select id="sessionSelect" class="form-select form-select-sm d-none" style="max-width: 16rem" title="Sesion activa"></select>
+      <button class="btn btn-sm btn-outline-success d-none" id="btnNuevaSesion" title="Crear otra sesion"><i class="bi bi-plus-lg"></i></button>
       <span id="sessionBadge" class="badge bg-secondary">cargando...</span>
       <span id="userBadge" class="badge bg-light text-dark d-none"></span>
       <button class="btn btn-sm btn-outline-light d-none" id="btnLogout" title="Cerrar sesión de usuario"><i class="bi bi-box-arrow-right"></i></button>
@@ -29,7 +31,8 @@
     <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-text"><i class="bi bi-chat-text"></i> Mensaje</button></li>
     <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-media"><i class="bi bi-paperclip"></i> Archivo</button></li>
     <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-check"><i class="bi bi-search"></i> Verificar numero</button></li>
-    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-history"><i class="bi bi-clock-history"></i> Historial</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-history" id="tabHistoryBtn"><i class="bi bi-clock-history"></i> Historial</button></li>
+    <li class="nav-item d-none" id="tabAdminLi"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-admin" id="tabAdminBtn"><i class="bi bi-gear"></i> Administracion</button></li>
   </ul>
 
   <div class="tab-content">
@@ -41,6 +44,7 @@
           <h5 class="card-title"><i class="bi bi-whatsapp text-success"></i> Vincular WhatsApp</h5>
           <div class="row mt-3">
             <div class="col-md-6">
+              <p class="mb-1">Sesion: <strong id="sessionName">-</strong></p>
               <p class="mb-1">Estado: <span id="sessionState" class="badge bg-secondary">-</span></p>
               <p class="mb-1">Numero vinculado: <strong id="sessionNumber">-</strong></p>
               <p class="mb-3">Session ID: <code id="sessionId">-</code></p>
@@ -51,8 +55,9 @@
               <div class="alert alert-info mb-0">
                 <small>
                   Solo necesitas escanear UNA vez. La sesion queda guardada y se reconecta sola al reiniciar
-                  el servicio. Las integraciones llaman a la API con el token de <code>/api/user/login</code>
-                  en la cabecera <code>Authorization: Bearer</code>.
+                  el servicio. Si tienes varias sesiones, eligela en el selector de arriba. Las integraciones
+                  llaman a la API con el token de <code>/api/user/login</code> en la cabecera
+                  <code>Authorization: Bearer</code>.
                 </small>
               </div>
             </div>
@@ -160,19 +165,90 @@
     <div class="tab-pane fade" id="tab-history">
       <div class="card shadow-sm">
         <div class="card-body">
-          <div class="d-flex justify-content-between align-items-center mb-3">
+          <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
             <h5 class="card-title mb-0"><i class="bi bi-clock-history"></i> Historial de mensajes</h5>
-            <button class="btn btn-sm btn-outline-secondary" id="btnRefreshHistory"><i class="bi bi-arrow-clockwise"></i> Refrescar</button>
+            <div class="d-flex gap-2">
+              <select id="historyStatus" class="form-select form-select-sm">
+                <option value="">Todos los estados</option>
+                <option value="queued">En cola</option>
+                <option value="sent">Enviados</option>
+                <option value="delivered">Entregados</option>
+                <option value="read">Leidos</option>
+                <option value="failed">Fallidos</option>
+              </select>
+              <button class="btn btn-sm btn-outline-secondary" id="btnRefreshHistory"><i class="bi bi-arrow-clockwise"></i> Refrescar</button>
+            </div>
           </div>
           <div class="table-responsive">
             <table class="table table-sm table-hover align-middle">
               <thead>
-                <tr><th>Fecha</th><th>Receptor</th><th>Mensaje</th><th>Estado</th></tr>
+                <tr><th>Fecha</th><th>Receptor</th><th>Mensaje</th><th>Estado</th><th></th></tr>
               </thead>
               <tbody id="historyBody">
-                <tr><td colspan="4" class="text-center text-muted">Sin datos</td></tr>
+                <tr><td colspan="5" class="text-center text-muted">Sin datos</td></tr>
               </tbody>
             </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ADMINISTRACION (solo ADMIN / SUPER_ADMIN) -->
+    <div class="tab-pane fade" id="tab-admin">
+      <div class="row g-3">
+        <div class="col-lg-6">
+          <div class="card shadow-sm h-100">
+            <div class="card-body">
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <h5 class="card-title mb-0"><i class="bi bi-activity"></i> Estado del servicio</h5>
+                <button class="btn btn-sm btn-outline-secondary" id="btnRefreshStatus"><i class="bi bi-arrow-clockwise"></i></button>
+              </div>
+              <div id="statusBox" class="small text-muted">Cargando...</div>
+            </div>
+          </div>
+        </div>
+        <div class="col-lg-6">
+          <div class="card shadow-sm h-100">
+            <div class="card-body">
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <h5 class="card-title mb-0"><i class="bi bi-broadcast"></i> Webhook saliente</h5>
+                <div class="d-flex gap-1">
+                  <button class="btn btn-sm btn-outline-warning" id="btnReplayFailed" title="Reenviar todos los fallidos"><i class="bi bi-arrow-repeat"></i> Reenviar fallidos</button>
+                  <button class="btn btn-sm btn-outline-secondary" id="btnRefreshWebhooks"><i class="bi bi-arrow-clockwise"></i></button>
+                </div>
+              </div>
+              <div id="webhookConfig" class="small text-muted mb-2"></div>
+              <div class="table-responsive" style="max-height: 18rem; overflow:auto">
+                <table class="table table-sm align-middle mb-0">
+                  <thead><tr><th>Fecha</th><th>Evento</th><th>Estado</th><th>Intentos</th><th></th></tr></thead>
+                  <tbody id="webhookBody"><tr><td colspan="5" class="text-muted">Sin datos</td></tr></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="col-12">
+          <div class="card shadow-sm">
+            <div class="card-body">
+              <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+                <h5 class="card-title mb-0"><i class="bi bi-people"></i> Usuarios</h5>
+                <button class="btn btn-sm btn-outline-secondary" id="btnRefreshUsers"><i class="bi bi-arrow-clockwise"></i></button>
+              </div>
+              <form id="formNewUser" class="row g-2 align-items-end mb-3">
+                <div class="col-md-3"><label class="form-label small mb-0">Correo</label><input type="email" class="form-control form-control-sm" id="nuEmail" required></div>
+                <div class="col-md-2"><label class="form-label small mb-0">Nombre</label><input type="text" class="form-control form-control-sm" id="nuUsuario" minlength="5" required></div>
+                <div class="col-md-3"><label class="form-label small mb-0">Contraseña (8+, May/min/num/simbolo)</label><input type="password" class="form-control form-control-sm" id="nuPassword" autocomplete="new-password" required></div>
+                <div class="col-md-2"><label class="form-label small mb-0">Rol</label>
+                  <select class="form-select form-select-sm" id="nuRol"><option value="USUARIO">USUARIO</option><option value="ADMIN">ADMIN</option><option value="SUPER_ADMIN">SUPER_ADMIN</option></select></div>
+                <div class="col-md-2"><button class="btn btn-sm btn-primary w-100" type="submit"><i class="bi bi-person-plus"></i> Crear</button></div>
+              </form>
+              <div class="table-responsive">
+                <table class="table table-sm table-hover align-middle mb-0">
+                  <thead><tr><th>Correo</th><th>Nombre</th><th>Rol</th><th>Activo</th><th>Creado</th><th></th></tr></thead>
+                  <tbody id="usersBody"><tr><td colspan="6" class="text-muted">Sin datos</td></tr></tbody>
+                </table>
+              </div>
+            </div>
           </div>
         </div>
       </div>

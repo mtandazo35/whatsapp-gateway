@@ -1,16 +1,21 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Message } from './entities/message.entity';
-import { Repository, SelectQueryBuilder } from 'typeorm';
+import { Message, MessageKind } from './entities/message.entity';
+import { LessThan, Repository, SelectQueryBuilder } from 'typeorm';
 import { FilterMessageDto } from './dto/filter-message.dto';
 import { Session } from 'src/session/entities/session.entity';
 import { isUUID } from 'class-validator';
 import { AuthUser, isAdmin } from 'src/user/interfaces/auth-user.interface';
+import { User } from 'src/user/entities/user.entity';
 
 export interface NewQueuedMessage {
   session: Session;
   message: string;
   receptor: string;
+  kind: MessageKind;
+  caption?: string | null;
+  fastMode?: boolean;
+  requestedBy?: string | null;
 }
 
 /** Transiciones que los ACK de WhatsApp pueden aplicar; nunca se baja de nivel. */
@@ -38,7 +43,9 @@ export class MessagesService {
       .createQueryBuilder('m')
       .leftJoinAndSelect('m.session', 'session')
       .leftJoin('session.owner', 'owner')
-      .addSelect(['owner.id']);
+      .addSelect(['owner.id'])
+      .leftJoin('m.requestedBy', 'requestedBy')
+      .addSelect(['requestedBy.id', 'requestedBy.email']);
   }
 
   /** Se crea ANTES de encolar: el id del mensaje viaja en el job y es lo que el cliente consulta. */
@@ -47,6 +54,10 @@ export class MessagesService {
       session: input.session,
       message: input.message,
       receptor: input.receptor,
+      kind: input.kind,
+      caption: input.caption ?? null,
+      fastMode: !!input.fastMode,
+      requestedBy: input.requestedBy ? ({ id: input.requestedBy } as User) : null,
       sent: false,
       status: 'queued',
     })
@@ -69,6 +80,41 @@ export class MessagesService {
       status: 'failed',
       lastError: texto.slice(0, 500),
     })
+  }
+
+  /** Mensajes en queued más viejos que maxAgeMs: candidatos a job perdido. */
+  async findStaleQueued(maxAgeMs: number, limit = 200): Promise<Pick<Message, 'id' | 'created_at'>[]> {
+    return this.messageRepository.find({
+      where: { status: 'queued', created_at: LessThan(new Date(Date.now() - maxAgeMs)) },
+      select: { id: true, created_at: true },
+      order: { created_at: 'ASC' },
+      take: limit,
+    })
+  }
+
+  /** Mensajes queued de una sesión (para cancelarlos al desactivarla). */
+  async findQueuedBySession(sessionId: string): Promise<Pick<Message, 'id'>[]> {
+    return this.messageRepository
+      .createQueryBuilder('m')
+      .innerJoin('m.session', 's')
+      .select(['m.id'])
+      .where('m.status = :st', { st: 'queued' })
+      .andWhere('s.sessionId = :sid', { sid: sessionId })
+      .getMany()
+  }
+
+  /** Conteo por estado en las últimas `horas` horas (para /status). */
+  async countsByStatus(horas = 24): Promise<Record<string, number>> {
+    const rows = await this.messageRepository
+      .createQueryBuilder('m')
+      .select('m.status', 'status')
+      .addSelect('count(*)', 'n')
+      .where('m.created_at > :desde', { desde: new Date(Date.now() - horas * 3600_000) })
+      .groupBy('m.status')
+      .getRawMany<{ status: string; n: string }>()
+    const out: Record<string, number> = {}
+    for (const r of rows) out[r.status] = Number(r.n)
+    return out
   }
 
   /**
@@ -102,6 +148,7 @@ export class MessagesService {
     const limit = Math.min(paginationDto.limit || 10, 200);
     const filter = paginationDto.filter || '';
     const session = paginationDto.session || null;
+    const status = paginationDto.status || null;
 
     const query = this.baseQuery();
 
@@ -111,9 +158,13 @@ export class MessagesService {
 
     if (filter) {
       query.andWhere(
-        '(m.message ILIKE :filtro OR session.nameSession ILIKE :filtro)',
+        '(m.message ILIKE :filtro OR session.nameSession ILIKE :filtro OR m.receptor ILIKE :filtro)',
         { filtro: `%${filter}%` }
       );
+    }
+
+    if (status) {
+      query.andWhere('m.status = :status', { status });
     }
 
     // El frontend y las integraciones usan el sessionId corto; la BD relaciona por UUID.

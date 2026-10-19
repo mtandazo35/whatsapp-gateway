@@ -135,6 +135,7 @@ if [ ! -f .env ]; then
   JWT_SECRET="$(openssl rand -hex 32)"
   ADMIN_EMAIL="$(gen_admin_email)"
   ADMIN_PASSWORD="$(gen_admin_password)"
+  BACKUP_PASS="$(openssl rand -hex 24)"
   ADMIN_GENERADO=1
   cat > .env <<EOF
 DOMAIN=${DOMAIN}
@@ -158,14 +159,18 @@ CORS_ORIGIN=
 # Webhook saliente opcional (mensajes entrantes + estado de sesion/mensajes)
 WEBHOOK_URL=
 WEBHOOK_SECRET=
+WEBHOOK_ALLOW_HTTP=false
 
 # Rate limit por IP y minuto (global / login / envios)
 RATE_LIMIT_GLOBAL_PER_MIN=600
 RATE_LIMIT_LOGIN_PER_MIN=10
 RATE_LIMIT_SEND_PER_MIN=120
 
-# Retencion de respaldos generados por scripts/backup.sh
+# Respaldos (scripts/backup.sh): retencion local, cifrado y copia fuera del host
 BACKUP_RETENTION_DAYS=30
+BACKUP_ENCRYPT_PASSPHRASE=${BACKUP_PASS}
+BACKUP_REMOTE_DEST=
+BACKUP_SSH_KEY=
 EOF
   chmod 600 .env
   log ".env creado (chmod 600). NO commitear este archivo."
@@ -296,6 +301,7 @@ if [ "$ADMIN_GENERADO" = "1" ]; then
   log "  Usuario inicial: ${ADMIN_EMAIL}"
   log "  Contraseña:      ${ADMIN_PASSWORD}"
   warn "  Guarda la contraseña y cambiala tras el primer login (PATCH /api/user/me)."
+  warn "  Los respaldos se cifran con BACKUP_ENCRYPT_PASSPHRASE (en .env): guarda esa clave fuera del servidor."
   warn "  Si la BD ya tenia usuarios, estas credenciales NO se aplican."
 else
   log "  Usuario inicial: ver ADMIN_EMAIL / ADMIN_PASSWORD en .env (solo valen si la BD estaba vacia)"

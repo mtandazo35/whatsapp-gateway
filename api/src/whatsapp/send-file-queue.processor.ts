@@ -9,6 +9,9 @@ import { MessagesService } from 'src/messages/messages.service';
 import { BadRequestException, Logger } from '@nestjs/common';
 import { WhatsappSessionManager } from './whatsapp-session-manager';
 import { assertSafeUrl } from './utils/url-guard';
+import { InjectQueue } from '@nestjs/bull';
+import { Queue } from 'bull';
+import { STALE_QUEUED_MS } from './whatsapp.service';
 
 /** Límites de tamaño por tipo (MB), alineados con lo que acepta WhatsApp. */
 const SIZE_LIMITS_MB: Record<string, number> = {
@@ -36,8 +39,26 @@ export class SendFileQueueProcessor {
 
   constructor(
     private readonly messageService: MessagesService,
-    private readonly whatsAppSessionManager: WhatsappSessionManager
+    private readonly whatsAppSessionManager: WhatsappSessionManager,
+    @InjectQueue('send-file') private readonly queue: Queue,
   ) {}
+
+  /** Barrido periódico: mensajes queued viejos cuyo job ya no existe pasan a failed. */
+  @Process('reapQueued')
+  async reapQueued() {
+    const stale = await this.messageService.findStaleQueued(STALE_QUEUED_MS)
+    let marcados = 0
+    for (const m of stale) {
+      const job = await this.queue.getJob(m.id)
+      const estado = job ? await job.getState() : null
+      if (!job || estado === 'completed' || estado === 'failed') {
+        await this.messageService.markFailed(m.id, `job perdido (${estado ?? 'sin job'}): la API se reinició o la cola se vació`)
+        marcados++
+      }
+    }
+    if (marcados) this.logger.warn(`barrido: ${marcados} mensaje(s) queued marcados como failed`)
+    return { marcados }
+  }
 
   private getRecipientJid(number: string): string {
     const cleanNumber = number.replace(/[^0-9]/g, '');

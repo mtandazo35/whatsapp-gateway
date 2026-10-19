@@ -5,11 +5,16 @@ import { MessagesService } from 'src/messages/messages.service';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import { assertSafeUrl, probeMediaUrl } from './utils/url-guard';
+import { SessionEventsService } from 'src/session/session-events.service';
+import { Message } from 'src/messages/entities/message.entity';
 
 /** Cuántos jobs fallidos se conservan en Redis para diagnóstico. */
 const KEEP_FAILED_JOBS = 1000
 /** Los datos de perfil (foto, perfil comercial) se piden a WhatsApp como mucho cada 5 min. */
 const INFO_CACHE_MS = 5 * 60 * 1000
+/** Un mensaje queued sin job en Bull pasados estos minutos se da por perdido. */
+export const STALE_QUEUED_MS = 15 * 60 * 1000
+export const REAP_JOB_ID = 'reap-queued'
 
 export interface QueuedSend {
   messageId: string
@@ -39,10 +44,28 @@ export class WhatsappService implements OnModuleInit {
     @InjectQueue('send-file')
     private sendMessageFileQueue: Queue,
     private readonly whatsAppSessionManager: WhatsappSessionManager,
-    private readonly messageService: MessagesService
+    private readonly messageService: MessagesService,
+    private readonly sessionEvents: SessionEventsService,
   ) {}
 
   async onModuleInit() {
+    // Desactivar o borrar una sesión desde el CRUD cierra el socket y cancela su cola.
+    this.sessionEvents.onDeactivated(sid => this.cancelSession(sid, 'sesión desactivada'))
+    this.sessionEvents.onDeleted(sid => this.cancelSession(sid, 'sesión eliminada'))
+
+    // Barrido cada 5 min de mensajes queued cuyo job ya no existe (reinicio, cola vaciada).
+    try {
+      await this.sendMessageFileQueue.add('reapQueued', {}, {
+        jobId: REAP_JOB_ID,
+        repeat: { cron: '*/5 * * * *' },
+        removeOnComplete: true,
+        removeOnFail: true,
+        attempts: 1,
+      })
+    } catch (error) {
+      this.logger.warn(`no se pudo programar el barrido de mensajes queued: ${error?.message}`)
+    }
+
     await this.whatsAppSessionManager.loadAllSessions();
   }
 
@@ -73,12 +96,12 @@ export class WhatsappService implements OnModuleInit {
   private async encolar(
     nombre: 'sendMessageText' | 'sendMessageUrl' | 'sendMessageFile',
     session: Session,
-    texto: string,
+    registro: { message: string; kind: Message['kind']; caption?: string | null; fastMode?: boolean; requestedBy?: string | null },
     number: string,
     data: Record<string, any>,
     opts: { attempts: number; backoffMs?: number },
   ): Promise<QueuedSend> {
-    const msg = await this.messageService.createQueued({ session, message: texto, receptor: number })
+    const msg = await this.messageService.createQueued({ session, receptor: number, ...registro })
 
     try {
       const job = await this.sendMessageFileQueue.add(
@@ -99,32 +122,30 @@ export class WhatsappService implements OnModuleInit {
     }
   }
 
-  async sendMessage(session: Session, number: string, message: string, fastMode: boolean): Promise<QueuedSend> {
+  async sendMessage(session: Session, number: string, message: string, fastMode: boolean, requestedBy?: string): Promise<QueuedSend> {
     // Sin socket abierto no se acepta: antes se encolaba y se perdía en silencio.
     this.validateSession(session.sessionId);
 
-    return this.encolar('sendMessageText', session, message, number, { message, fastMode }, { attempts: 1 })
+    return this.encolar(
+      'sendMessageText', session,
+      { message, kind: 'text', fastMode, requestedBy },
+      number, { message, fastMode }, { attempts: 1 },
+    )
   }
 
   /**
    * Envía multimedia desde una URL. La URL se valida contra destinos internos
    * (anti-SSRF) y se sondea con HEAD antes de aceptar el trabajo.
    */
-  async sendMediaMessage(
-    session: Session,
-    number: string,
-    mediaUrl: string,
-    caption?: string
-  ): Promise<QueuedSend> {
+  async sendMediaMessage(session: Session, number: string, mediaUrl: string, caption?: string, requestedBy?: string): Promise<QueuedSend> {
     this.validateSession(session.sessionId);
 
     const url = await assertSafeUrl(mediaUrl)
     const probe = await probeMediaUrl(url)
 
     return this.encolar(
-      'sendMessageUrl',
-      session,
-      mediaUrl,
+      'sendMessageUrl', session,
+      { message: mediaUrl, kind: 'media_url', caption: caption ?? null, requestedBy },
       number,
       { caption, mediaUrl: url.toString(), type: probe.type, contentType: probe.contentType },
       { attempts: 2, backoffMs: 2000 },
@@ -134,12 +155,7 @@ export class WhatsappService implements OnModuleInit {
   /**
    * Envía archivos ya subidos por multer. Un job por archivo.
    */
-  async sendMediaFiles(
-    session: Session,
-    number: string,
-    files: Express.Multer.File[],
-    caption?: string
-  ): Promise<Array<QueuedSend & { file: string }>> {
+  async sendMediaFiles(session: Session, number: string, files: Express.Multer.File[], caption?: string, requestedBy?: string): Promise<Array<QueuedSend & { file: string }>> {
     this.validateSession(session.sessionId);
 
     if (!files || files.length === 0) {
@@ -150,9 +166,8 @@ export class WhatsappService implements OnModuleInit {
 
     for (const file of files) {
       const queued = await this.encolar(
-        'sendMessageFile',
-        session,
-        file.originalname,
+        'sendMessageFile', session,
+        { message: file.originalname, kind: 'file', caption: caption ?? null, requestedBy },
         number,
         { caption, path: file.path, mimetype: file.mimetype, originalname: file.originalname },
         { attempts: 2, backoffMs: 2000 },
@@ -161,6 +176,59 @@ export class WhatsappService implements OnModuleInit {
     }
 
     return resultados
+  }
+
+  /**
+   * Reintenta un envío fallido creando un mensaje nuevo (el histórico se conserva).
+   * Texto y URL se pueden repetir; un archivo subido ya no existe en disco.
+   */
+  async retry(original: Message, session: Session, requestedBy: string): Promise<QueuedSend> {
+    if (original.status !== 'failed') {
+      throw new BadRequestException(`Solo se reintentan mensajes en estado failed (este está en ${original.status})`)
+    }
+    if (original.kind === 'file') {
+      throw new BadRequestException('El archivo temporal ya no existe; vuelve a subirlo')
+    }
+    if (original.kind === 'media_url') {
+      return this.sendMediaMessage(session, original.receptor, original.message, original.caption ?? undefined, requestedBy)
+    }
+    return this.sendMessage(session, original.receptor, original.message, original.fastMode, requestedBy)
+  }
+
+  /**
+   * Cierra el socket, cancela los jobs en espera de esa sesión y marca sus
+   * mensajes queued como failed. Lo disparan el CRUD (desactivar/borrar) y el logout.
+   */
+  async cancelSession(sessionId: string, motivo: string): Promise<{ cancelled: number }> {
+    let cancelled = 0
+    try {
+      await this.logoutSession(sessionId)
+    } catch (error) {
+      this.logger.warn(`[${sessionId}] logout al cancelar falló: ${error?.message}`)
+    }
+
+    try {
+      const jobs = await this.sendMessageFileQueue.getJobs(['waiting', 'delayed', 'paused'])
+      for (const job of jobs) {
+        if (job?.data?.sessionId !== sessionId) continue
+        await job.remove().catch(() => undefined)
+        if (job.data?.messageId) await this.messageService.markFailed(job.data.messageId, motivo).catch(() => undefined)
+        cancelled++
+      }
+      // Mensajes queued sin job (por si Bull ya los había soltado).
+      for (const m of await this.messageService.findQueuedBySession(sessionId)) {
+        await this.messageService.markFailed(m.id, motivo).catch(() => undefined)
+      }
+    } catch (error) {
+      this.logger.warn(`[${sessionId}] no se pudieron cancelar jobs: ${error?.message}`)
+    }
+
+    this.logger.log(`[${sessionId}] ${motivo}: socket cerrado, ${cancelled} job(s) cancelados`)
+    return { cancelled }
+  }
+
+  async queueCounts() {
+    return this.sendMessageFileQueue.getJobCounts()
   }
 
   async getQR(sessionId: string) {
@@ -194,8 +262,7 @@ export class WhatsappService implements OnModuleInit {
 
   /**
    * Estado + datos de perfil. El estado siempre es en vivo; la foto y el perfil
-   * comercial se cachean 5 min para no consultar a WhatsApp en cada polling
-   * (antes era cada 3 s por pestaña abierta: riesgo de límite o bloqueo del número).
+   * comercial se cachean 5 min para no consultar a WhatsApp en cada polling.
    */
   async getSessionInfo(sessionId: string): Promise<SessionInfo> {
     const state = this.whatsAppSessionManager.getSessionState(sessionId)
