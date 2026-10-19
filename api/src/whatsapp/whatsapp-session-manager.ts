@@ -4,7 +4,6 @@ import * as path from 'path'
 import NodeCache from '@cacheable/node-cache'
 import * as P from 'pino'
 import { Boom } from '@hapi/boom'
-import { deleteFilesInFolder } from './utils/files-utils'
 import { handleMessagesUpsert } from './handlers/messages-upsert.handler'
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common'
 import axios from 'axios'
@@ -165,8 +164,11 @@ export class WhatsappSessionManager implements OnModuleDestroy {
 
     sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }: ConnectionState) => {
       try {
-        // Si este socket ya fue reemplazado (logout + nuevo QR), sus eventos se ignoran.
-        if (this.sessions.get(sessionId) !== sock) {
+        // Si este socket ya fue reemplazado por otro (logout + nuevo QR), sus eventos se
+        // ignoran. Si simplemente ya no está en el mapa (logout en curso), el 'close' que
+        // Baileys emite de forma asíncrona sí se procesa: es el que avisa al webhook.
+        const actual = this.sessions.get(sessionId)
+        if (actual && actual !== sock) {
           this.logger.debug(`[${sessionId}] evento de un socket antiguo ignorado (${connection ?? 'qr'})`)
           return
         }
@@ -211,9 +213,10 @@ export class WhatsappSessionManager implements OnModuleDestroy {
             this.scheduleReconnect(sessionId)
           } else {
             this.reconnectAttempts.delete(sessionId)
-            this.sessions.delete(sessionId)
+            if (this.sessions.get(sessionId) === sock) this.sessions.delete(sessionId)
             await this.sessionRepository.update({ sessionId }, { status: 'close', numberSession: '' })
-            await deleteFilesInFolder(authPath)
+            // Se quita la carpeta entera: así loadAllSessions no la ve como sesión a medias.
+            await fs.remove(authPath).catch(() => undefined)
           }
         }
 
@@ -428,8 +431,8 @@ export class WhatsappSessionManager implements OnModuleDestroy {
       this.sessions.delete(sessionId)
     }
 
-    // Idempotente: si el handler de 'close' ya las borró, no hay nada que hacer.
-    await deleteFilesInFolder(path.resolve('sesiones', sessionId)).catch(() => undefined)
+    // Idempotente: si el handler de 'close' ya la borró, no hay nada que hacer.
+    await fs.remove(path.resolve('sesiones', sessionId)).catch(() => undefined)
 
     try {
       await this.sessionRepository.update({ sessionId }, { status: 'close', numberSession: '' })
