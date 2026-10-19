@@ -11,6 +11,10 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   app.setGlobalPrefix('api')
 
+  // Un salto de proxy (Caddy en la misma red de compose): req.ip pasa a ser la IP
+  // real del cliente via X-Forwarded-For, que es lo que usa el rate limit.
+  app.getHttpAdapter().getInstance().set('trust proxy', +(process.env.TRUST_PROXY_HOPS ?? 1))
+
   // El frontend se sirve desde el mismo origen (Caddy), asi que CORS solo se
   // abre si el operador lo pide explicitamente para otros origenes.
   const corsOrigin = process.env.CORS_ORIGIN?.split(',').map(s => s.trim()).filter(Boolean)

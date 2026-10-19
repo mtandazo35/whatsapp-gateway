@@ -7,12 +7,14 @@ import { PaginationDto } from 'src/common';
 import { LoginUserDto } from './dto/login-user.dto';
 import { GetUser, Public, Roles } from './decorators';
 import { AuthUser } from './interfaces/auth-user.interface';
+import { ThrottleLogin } from 'src/common/rate-limit';
 
 @Controller('user')
 export class UserController {
   constructor(private readonly userService: UserService) {}
 
   @Public()
+  @ThrottleLogin()
   @Post('/login')
   login(@Body() user: LoginUserDto) {
     return this.userService.login(user);

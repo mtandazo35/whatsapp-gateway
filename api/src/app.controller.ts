@@ -4,7 +4,9 @@ import { DataSource } from 'typeorm';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import { Public } from './user/decorators';
+import { SkipThrottle } from '@nestjs/throttler';
 
+@SkipThrottle()
 @Controller()
 export class AppController {
   constructor(

@@ -28,6 +28,7 @@ import { GetUser } from 'src/user/decorators';
 import { AuthUser } from 'src/user/interfaces/auth-user.interface';
 import { Session } from 'src/session/entities/session.entity';
 import { removeQuietly } from './utils/files-utils';
+import { ThrottleSend } from 'src/common/rate-limit';
 
 /** Límites de subida por petición (Caddy además corta el cuerpo en 25 MB). */
 export const UPLOAD_MAX_FILES = 10
@@ -102,6 +103,7 @@ export class WhatsappController {
     return states.filter(s => visibles.has(s.sessionId))
   }
 
+  @ThrottleSend()
   @Post('/send')
   @HttpCode(202)
   async sendMessage(
@@ -143,6 +145,7 @@ export class WhatsappController {
     }
   }
 
+  @ThrottleSend()
   @Post('/send-media/url')
   @HttpCode(202)
   async sendMediaFromUrl(@Body() body: SendMediaUrlDto, @GetUser() actor: AuthUser) {
@@ -179,6 +182,7 @@ export class WhatsappController {
       })
     }
   ))
+  @ThrottleSend()
   @Post('/send-media/file')
   @HttpCode(202)
   async sendMediaFromFile(

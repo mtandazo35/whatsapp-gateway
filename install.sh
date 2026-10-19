@@ -142,8 +142,8 @@ DOMAIN=${DOMAIN}
 POSTGRES_USER=whatsapp
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
 POSTGRES_DB=whatsapp
-# Solo en primer boot. Cambia a false despues para no perder columnas.
-DB_SYNC=true
+# El esquema lo crean las migraciones al arrancar. true solo para desarrollo.
+DB_SYNC=false
 
 JWT_SECRET=${JWT_SECRET}
 JWT_EXPIRES_IN=8h
@@ -158,6 +158,11 @@ CORS_ORIGIN=
 # Webhook saliente opcional (mensajes entrantes + estado de sesion/mensajes)
 WEBHOOK_URL=
 WEBHOOK_SECRET=
+
+# Rate limit por IP y minuto (global / login / envios)
+RATE_LIMIT_GLOBAL_PER_MIN=600
+RATE_LIMIT_LOGIN_PER_MIN=10
+RATE_LIMIT_SEND_PER_MIN=120
 
 # Retencion de respaldos generados por scripts/backup.sh
 BACKUP_RETENTION_DAYS=30
