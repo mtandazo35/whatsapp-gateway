@@ -50,7 +50,7 @@ export class StatusController {
     }
   }
 
-  private alertas(send: Record<string, number>, wh: Record<string, number>, sesiones: Record<string, number>): string[] {
+  private alertas(send: { waiting?: number; failed?: number }, wh: Record<string, number>, sesiones: Record<string, number>): string[] {
     const out: string[] = []
     if ((send.waiting ?? 0) > 100) out.push(`cola de envío con ${send.waiting} trabajos esperando`)
     if ((send.failed ?? 0) > 50) out.push(`${send.failed} trabajos de envío fallidos conservados en Redis`)
