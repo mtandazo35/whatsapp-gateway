@@ -1,0 +1,88 @@
+name: Actualizar dependencias
+
+# Lanzado a mano (Actions -> Actualizar dependencias -> Run workflow) sobre una rama.
+# Regenera package-lock.json con lo que diga package.json (versiones y overrides),
+# aplica `npm audit fix` para lo no rompedor, formatea con prettier, compila, corre
+# las pruebas unitarias y, si todo pasa, commitea el resultado en la MISMA rama.
+# Así ninguna máquina del operador tiene que instalar node ni descargar paquetes.
+
+on:
+  workflow_dispatch:
+    inputs:
+      audit_fix:
+        description: 'Aplicar npm audit fix (no rompedor) tras regenerar el lock'
+        type: boolean
+        default: true
+      formatear:
+        description: 'Pasar prettier --write a src y test'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  actualizar:
+    name: Regenerar lock, formatear, probar y commitear
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref_name }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Regenerar package-lock.json
+        run: |
+          rm -f package-lock.json
+          npm install --no-audit --no-fund
+
+      - name: npm audit fix (no rompedor)
+        if: ${{ inputs.audit_fix }}
+        run: npm audit fix --omit=dev --no-fund || true
+
+      - name: Formatear con prettier
+        if: ${{ inputs.formatear }}
+        run: npx prettier --write "src/**/*.ts" "test/**/*.ts"
+
+      - name: Compilar
+        run: npm run build
+
+      - name: Pruebas unitarias
+        run: npx jest --ci --colors=false
+
+      - name: Lint
+        run: npm run lint -- --max-warnings=0
+
+      - name: Resumen de versiones y auditoría
+        run: |
+          echo "## Versiones resueltas" >> "$GITHUB_STEP_SUMMARY"
+          for p in @whiskeysockets/baileys sharp multer express proxy-addr validator ws lodash qs body-parser path-to-regexp @nestjs/core typeorm; do
+            v=$(node -e "try{console.log(require('$p/package.json').version)}catch(e){console.log('-')}" 2>/dev/null)
+            echo "- $p: $v" >> "$GITHUB_STEP_SUMMARY"
+          done
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "## npm audit --omit=dev" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          (npm audit --omit=dev 2>&1 || true) | tail -40 >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Auditoría bloqueante (alta o crítica)
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Commitear el resultado en la rama
+        working-directory: .
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add api/package.json api/package-lock.json api/src api/test
+          if git diff --cached --quiet; then
+            echo "Sin cambios que commitear"
+          else
+            git commit -m "deps: package-lock regenerado, npm audit fix y prettier (workflow Actualizar dependencias)"
+            git push origin HEAD:${{ github.ref_name }}
+          fi
