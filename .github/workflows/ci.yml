@@ -84,6 +84,8 @@ jobs:
       ADMIN_EMAIL: admin@ci.local
       ADMIN_PASSWORD: Ci.Password1
       PORT: 3005
+      # Baileys es ESM y la API lo carga con import() dinámico: Jest necesita este flag.
+      NODE_OPTIONS: --experimental-vm-modules
     defaults:
       run:
         working-directory: api

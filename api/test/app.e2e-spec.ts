@@ -10,6 +10,7 @@ import { AppModule } from './../src/app.module';
 describe('API (e2e)', () => {
   let app: INestApplication;
 
+  // Arrancar la app real tarda: migraciones, colas y la carga dinámica de Baileys.
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
@@ -18,11 +19,11 @@ describe('API (e2e)', () => {
     app = moduleFixture.createNestApplication();
     app.setGlobalPrefix('api');
     await app.init();
-  });
+  }, 90_000);
 
   afterAll(async () => {
     await app?.close();
-  });
+  }, 30_000);
 
   it('GET /api/health responde sin token', () => {
     return request(app.getHttpServer())
