@@ -23,6 +23,13 @@ import { AuthUser } from './interfaces/auth-user.interface';
 
 const BCRYPT_ROUNDS = 10;
 
+/** Copia del usuario sin el hash de contraseña (nunca sale por la API). */
+function sinPassword<T extends { password?: string }>(u: T): Omit<T, 'password'> {
+  const copia = { ...u };
+  delete copia.password;
+  return copia;
+}
+
 @Injectable()
 export class UserService implements OnModuleInit {
 
@@ -96,10 +103,8 @@ export class UserService implements OnModuleInit {
       throw new UnauthorizedException('Usuario desactivado')
     }
 
-    const { password: _, ...restUser } = userFound;
-
     return {
-      ...restUser,
+      ...sinPassword(userFound),
       token: await this.signJWT({ id: userFound.id })
     }
   }
@@ -130,10 +135,9 @@ export class UserService implements OnModuleInit {
       })
 
       const user = await this.userRepository.save(userCreate)
-      const { password: _, ...rest } = user;
 
       // El alta la hace un administrador: no se devuelve token del usuario creado.
-      return rest
+      return sinPassword(user)
     } catch (error) {
       if (error.message?.includes('duplicate key value violates unique constraint')) {
         throw new BadRequestException(`Ya existe un usuario con este email ${ createUserDto.email }`)
@@ -182,8 +186,7 @@ export class UserService implements OnModuleInit {
     if (!user)
       throw new NotFoundException(`No se encontró al usuario con el id ${ id }`)
 
-    const { password: _, ...rest } = user;
-    return rest;
+    return sinPassword(user);
   }
 
   async update(id: string, updateUserDto: UpdateUserDto, actor: AuthUser) {

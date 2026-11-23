@@ -8,8 +8,10 @@ import { extname } from 'path';
  * ve el destinatario; nunca se usa como ruta en disco, asi dos subidas con el
  * mismo nombre no se pisan ni un job puede borrar el archivo de otro.
  */
-export const fileNamer = (_req: Express.Request, file: Express.Multer.File, callback: Function) => {
-  if (!file) return callback(new Error('Archivo vacío'), false);
+type NamerCallback = (error: Error | null, filename: string) => void;
+
+export const fileNamer = (_req: Express.Request, file: Express.Multer.File, callback: NamerCallback) => {
+  if (!file) return callback(new Error('Archivo vacío'), '');
 
   ensureDirSync('./static');
 

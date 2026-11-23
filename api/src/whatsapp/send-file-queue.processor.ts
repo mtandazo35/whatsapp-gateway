@@ -3,7 +3,7 @@ import { Job } from 'bull';
 import axios from 'axios'
 import { Buffer } from 'buffer'
 import { basename } from 'path'
-import mime from 'mime-types'
+import * as mime from 'mime-types'
 import { Process, Processor } from '@nestjs/bull';
 import { MessagesService } from 'src/messages/messages.service';
 import { BadRequestException, Logger } from '@nestjs/common';
@@ -335,6 +335,7 @@ export class SendFileQueueProcessor {
     }
 
     // sharp es dependencia directa (package.json); se carga aquí para no pagar el arranque si no hay imágenes.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const sharp = require('sharp');
 
     let quality = 80;
