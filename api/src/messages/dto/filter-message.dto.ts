@@ -1,16 +1,23 @@
-import { IsIn, IsOptional, IsString, MaxLength } from "class-validator";
-import { PaginationDto } from "src/common";
+import { IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
+import { PaginationDto } from 'src/common';
 
 export class FilterMessageDto extends PaginationDto {
-
   /** UUID de la sesión o su sessionId corto; ambos valen. */
   @IsOptional()
   @IsString()
   @MaxLength(64)
-  session?: string
+  session?: string;
 
   @IsOptional()
-  @IsIn(['queued', 'sent', 'delivered', 'read', 'played', 'failed', 'error', 'pending'])
-  status?: string
-
+  @IsIn([
+    'queued',
+    'sent',
+    'delivered',
+    'read',
+    'played',
+    'failed',
+    'error',
+    'pending',
+  ])
+  status?: string;
 }

@@ -64,7 +64,9 @@ export class EsquemaInicial1792442167000 implements MigrationInterface {
       "deleted_at"    timestamp,
       CONSTRAINT "PK_sessions_id" PRIMARY KEY ("id")
     )`);
-    await q.query(`ALTER TABLE "sessions" ADD COLUMN IF NOT EXISTS "owner_id" uuid`);
+    await q.query(
+      `ALTER TABLE "sessions" ADD COLUMN IF NOT EXISTS "owner_id" uuid`,
+    );
     await q.query(`DO $$ BEGIN
       IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = '"sessions"'::regclass AND contype = 'u'
                      AND conkey = ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid = '"sessions"'::regclass AND attname = 'sessionId')]) THEN
@@ -77,7 +79,9 @@ export class EsquemaInicial1792442167000 implements MigrationInterface {
           FOREIGN KEY ("owner_id") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE NO ACTION;
       END IF;
     END $$;`);
-    await q.query(`CREATE INDEX IF NOT EXISTS "IDX_sessions_owner_id" ON "sessions" ("owner_id")`);
+    await q.query(
+      `CREATE INDEX IF NOT EXISTS "IDX_sessions_owner_id" ON "sessions" ("owner_id")`,
+    );
 
     // ---- messages ----
     await q.query(`CREATE TABLE IF NOT EXISTS "messages" (
@@ -94,20 +98,34 @@ export class EsquemaInicial1792442167000 implements MigrationInterface {
       "deleted_at"    timestamp,
       CONSTRAINT "PK_messages_id" PRIMARY KEY ("id")
     )`);
-    await q.query(`ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "wa_message_id" character varying(128)`);
-    await q.query(`ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "status" character varying(32) NOT NULL DEFAULT 'queued'`);
-    await q.query(`ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "last_error" character varying(512)`);
+    await q.query(
+      `ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "wa_message_id" character varying(128)`,
+    );
+    await q.query(
+      `ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "status" character varying(32) NOT NULL DEFAULT 'queued'`,
+    );
+    await q.query(
+      `ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "last_error" character varying(512)`,
+    );
     // Defaults de versiones anteriores (sent=true, status='pending') dejan de aplicar.
-    await q.query(`ALTER TABLE "messages" ALTER COLUMN "sent" SET DEFAULT false`);
-    await q.query(`ALTER TABLE "messages" ALTER COLUMN "status" SET DEFAULT 'queued'`);
+    await q.query(
+      `ALTER TABLE "messages" ALTER COLUMN "sent" SET DEFAULT false`,
+    );
+    await q.query(
+      `ALTER TABLE "messages" ALTER COLUMN "status" SET DEFAULT 'queued'`,
+    );
     await q.query(`DO $$ BEGIN
       IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = '"messages"'::regclass AND contype = 'f') THEN
         ALTER TABLE "messages" ADD CONSTRAINT "FK_messages_session_sessions"
           FOREIGN KEY ("session_id") REFERENCES "sessions"("id") ON DELETE NO ACTION ON UPDATE NO ACTION;
       END IF;
     END $$;`);
-    await q.query(`CREATE INDEX IF NOT EXISTS "IDX_messages_wa_message_id" ON "messages" ("wa_message_id")`);
-    await q.query(`CREATE INDEX IF NOT EXISTS "IDX_messages_session_created" ON "messages" ("session_id", "created_at" DESC)`);
+    await q.query(
+      `CREATE INDEX IF NOT EXISTS "IDX_messages_wa_message_id" ON "messages" ("wa_message_id")`,
+    );
+    await q.query(
+      `CREATE INDEX IF NOT EXISTS "IDX_messages_session_created" ON "messages" ("session_id", "created_at" DESC)`,
+    );
   }
 
   public async down(q: QueryRunner): Promise<void> {
@@ -117,8 +135,12 @@ export class EsquemaInicial1792442167000 implements MigrationInterface {
     await q.query(`DROP INDEX IF EXISTS "IDX_messages_wa_message_id"`);
     await q.query(`DROP INDEX IF EXISTS "IDX_sessions_owner_id"`);
     await q.query(`ALTER TABLE "messages" DROP COLUMN IF EXISTS "last_error"`);
-    await q.query(`ALTER TABLE "sessions" DROP CONSTRAINT IF EXISTS "FK_sessions_owner_users"`);
-    await q.query(`ALTER TABLE "sessions" DROP CONSTRAINT IF EXISTS "UQ_sessions_sessionId"`);
+    await q.query(
+      `ALTER TABLE "sessions" DROP CONSTRAINT IF EXISTS "FK_sessions_owner_users"`,
+    );
+    await q.query(
+      `ALTER TABLE "sessions" DROP CONSTRAINT IF EXISTS "UQ_sessions_sessionId"`,
+    );
     await q.query(`ALTER TABLE "sessions" DROP COLUMN IF EXISTS "owner_id"`);
 
     const vacias = await q.query(

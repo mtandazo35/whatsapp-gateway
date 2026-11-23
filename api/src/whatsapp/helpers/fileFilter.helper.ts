@@ -1,4 +1,3 @@
-
 /**
  * Filtro de multer. Se aceptan todos los tipos (el gateway reenvía documentos
  * arbitrarios), pero se rechazan nombres vacíos. Los límites de tamaño y
@@ -6,9 +5,13 @@
  */
 type FilterCallback = (error: Error | null, acceptFile: boolean) => void;
 
-export const fileFilter = ( _req: Express.Request, file: Express.Multer.File, callback: FilterCallback ) => {
+export const fileFilter = (
+  _req: Express.Request,
+  file: Express.Multer.File,
+  callback: FilterCallback,
+) => {
+  if (!file || !file.originalname)
+    return callback(new Error('Archivo vacío'), false);
 
-  if ( !file || !file.originalname ) return callback( new Error('Archivo vacío'), false );
-
-  return callback( null, true )
-}
+  return callback(null, true);
+};

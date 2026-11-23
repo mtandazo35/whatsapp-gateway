@@ -1,14 +1,24 @@
-import { Message } from "src/messages/entities/message.entity";
-import { User } from "src/user/entities/user.entity";
-import { Column, CreateDateColumn, DeleteDateColumn, Entity, JoinColumn, ManyToOne, OneToMany, PrimaryGeneratedColumn, UpdateDateColumn } from "typeorm";
+import { Message } from 'src/messages/entities/message.entity';
+import { User } from 'src/user/entities/user.entity';
+import {
+  Column,
+  CreateDateColumn,
+  DeleteDateColumn,
+  Entity,
+  JoinColumn,
+  ManyToOne,
+  OneToMany,
+  PrimaryGeneratedColumn,
+  UpdateDateColumn,
+} from 'typeorm';
 
 @Entity('sessions')
 export class Session {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @OneToMany(() => Message, (message) => message.session )
-  messages: Message[]
+  @OneToMany(() => Message, (message) => message.session)
+  messages: Message[];
 
   /**
    * Dueño de la sesión. Los no administradores solo ven y usan sus sesiones.
@@ -32,7 +42,7 @@ export class Session {
     type: 'enum',
     enum: ['open', 'close', 'connecting', 'not_started'],
     default: 'not_started',
-    nullable: true
+    nullable: true,
   })
   status: 'open' | 'close' | 'connecting' | 'not_started';
 

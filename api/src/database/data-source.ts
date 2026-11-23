@@ -21,7 +21,10 @@ export function buildDataSourceOptions(): DataSourceOptions {
     password: process.env.POSTGRES_PASSWORD,
     ssl: process.env.POSTGRES_SSL === 'true',
     extra: {
-      ssl: process.env.POSTGRES_SSL === 'true' ? { rejectUnauthorized: false } : null,
+      ssl:
+        process.env.POSTGRES_SSL === 'true'
+          ? { rejectUnauthorized: false }
+          : null,
     },
     entities: [join(__dirname, '..', '**', '*.entity.' + (esTs ? 'ts' : 'js'))],
     migrations: [join(__dirname, 'migrations', '*.' + (esTs ? 'ts' : 'js'))],
@@ -30,7 +33,10 @@ export function buildDataSourceOptions(): DataSourceOptions {
     synchronize: process.env.DB_SYNC === 'true',
     // Por defecto las migraciones pendientes se aplican al arrancar la API.
     migrationsRun: process.env.DB_MIGRATIONS !== 'false',
-    logging: process.env.DB_LOGGING === 'true' ? ['error', 'warn', 'migration'] : ['error', 'migration'],
+    logging:
+      process.env.DB_LOGGING === 'true'
+        ? ['error', 'warn', 'migration']
+        : ['error', 'migration'],
   };
 }
 

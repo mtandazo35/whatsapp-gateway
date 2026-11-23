@@ -1,9 +1,17 @@
-import { IsEmail, IsEnum, IsNotEmpty, IsOptional, IsString, IsStrongPassword, MinLength } from "class-validator";
+import {
+  IsEmail,
+  IsEnum,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  IsStrongPassword,
+  MinLength,
+} from 'class-validator';
 
 export enum Rol {
   SUPER_ADMIN = 'SUPER_ADMIN',
   ADMIN = 'ADMIN',
-  USUARIO = 'USUARIO'
+  USUARIO = 'USUARIO',
 }
 
 export class CreateUserDto {
@@ -12,7 +20,10 @@ export class CreateUserDto {
   email: string;
 
   @IsNotEmpty()
-  @IsStrongPassword({}, { message: "La contraseña no es lo suficientemente segura." })
+  @IsStrongPassword(
+    {},
+    { message: 'La contraseña no es lo suficientemente segura.' },
+  )
   password: string;
 
   @IsNotEmpty()
@@ -26,7 +37,7 @@ export class CreateUserDto {
 
   @IsOptional()
   @IsEnum(Rol, {
-    message: `El rol debe ser uno de: ${Object.values(Rol).join(', ')}`
+    message: `El rol debe ser uno de: ${Object.values(Rol).join(', ')}`,
   })
   rol: Rol;
 }

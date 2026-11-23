@@ -1,4 +1,11 @@
-import { Controller, Get, Param, Delete, Query, ParseUUIDPipe } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Param,
+  Delete,
+  Query,
+  ParseUUIDPipe,
+} from '@nestjs/common';
 import { MessagesService } from './messages.service';
 import { FilterMessageDto } from './dto/filter-message.dto';
 import { GetUser, Roles } from 'src/user/decorators';
@@ -14,7 +21,10 @@ export class MessagesController {
   constructor(private readonly messagesService: MessagesService) {}
 
   @Get()
-  findAll(@Query() paginationDto: FilterMessageDto, @GetUser() actor: AuthUser) {
+  findAll(
+    @Query() paginationDto: FilterMessageDto,
+    @GetUser() actor: AuthUser,
+  ) {
     return this.messagesService.findAll(paginationDto, actor);
   }
 

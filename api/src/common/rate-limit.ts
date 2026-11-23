@@ -17,5 +17,7 @@ export const RATE_LIMIT = {
   sendPerMin: entero('RATE_LIMIT_SEND_PER_MIN', 120),
 };
 
-export const ThrottleLogin = () => Throttle({ default: { limit: RATE_LIMIT.loginPerMin, ttl: 60_000 } });
-export const ThrottleSend = () => Throttle({ default: { limit: RATE_LIMIT.sendPerMin, ttl: 60_000 } });
+export const ThrottleLogin = () =>
+  Throttle({ default: { limit: RATE_LIMIT.loginPerMin, ttl: 60_000 } });
+export const ThrottleSend = () =>
+  Throttle({ default: { limit: RATE_LIMIT.sendPerMin, ttl: 60_000 } });

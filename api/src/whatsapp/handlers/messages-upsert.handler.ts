@@ -1,16 +1,16 @@
-import { Logger } from '@nestjs/common'
-import { WebhookService } from '../webhook.service'
+import { Logger } from '@nestjs/common';
+import { WebhookService } from '../webhook.service';
 
-const logger = new Logger('MessagesUpsertHandler')
+const logger = new Logger('MessagesUpsertHandler');
 
-let baileysHelpers: { isJidNewsletter: (jid: string) => boolean } | null = null
+let baileysHelpers: { isJidNewsletter: (jid: string) => boolean } | null = null;
 
 async function loadBaileysHelpers() {
-  if (baileysHelpers) return baileysHelpers
-  const importBaileys = new Function('s', 'return import(s)')
-  const mod = await importBaileys('@whiskeysockets/baileys')
-  baileysHelpers = { isJidNewsletter: mod.isJidNewsletter }
-  return baileysHelpers
+  if (baileysHelpers) return baileysHelpers;
+  const importBaileys = new Function('s', 'return import(s)');
+  const mod = await importBaileys('@whiskeysockets/baileys');
+  baileysHelpers = { isJidNewsletter: mod.isJidNewsletter };
+  return baileysHelpers;
 }
 
 /**
@@ -29,20 +29,20 @@ export async function handleMessagesUpsert(
   webhook: WebhookService,
 ): Promise<void> {
   try {
-    if (upsert.type !== 'notify') return
+    if (upsert.type !== 'notify') return;
 
     // Mitigación recomendada por el aviso: el gateway no solicita historial bajo
     // demanda, así que un upsert con requestId no es nuestro y se descarta.
     if (upsert.requestId) {
-      logger.warn(`[${sessionId}] upsert con requestId inesperado descartado`)
-      return
+      logger.warn(`[${sessionId}] upsert con requestId inesperado descartado`);
+      return;
     }
 
     for (const msg of upsert.messages) {
-      await processMessage(msg, sessionId, webhook)
+      await processMessage(msg, sessionId, webhook);
     }
   } catch (error) {
-    logger.error(`[${sessionId}] Error en handleMessagesUpsert:`, error)
+    logger.error(`[${sessionId}] Error en handleMessagesUpsert:`, error);
   }
 }
 
@@ -51,13 +51,13 @@ async function processMessage(
   sessionId: string,
   webhook: WebhookService,
 ): Promise<void> {
-  const remoteJid: string = msg.key?.remoteJid ?? ''
-  const fromMe: boolean = msg.key?.fromMe ?? false
+  const remoteJid: string = msg.key?.remoteJid ?? '';
+  const fromMe: boolean = msg.key?.fromMe ?? false;
 
-  if (fromMe) return
+  if (fromMe) return;
 
-  const { isJidNewsletter } = await loadBaileysHelpers()
-  if (isJidNewsletter(remoteJid)) return
+  const { isJidNewsletter } = await loadBaileysHelpers();
+  if (isJidNewsletter(remoteJid)) return;
 
   const text =
     msg.message?.conversation ||
@@ -65,12 +65,14 @@ async function processMessage(
     msg.message?.imageMessage?.caption ||
     msg.message?.videoMessage?.caption ||
     msg.message?.documentMessage?.caption ||
-    null
+    null;
 
-  const number = remoteJid.split('@')[0]?.split(':')[0] ?? ''
-  const messageType = Object.keys(msg.message ?? {})[0] ?? 'unknown'
+  const number = remoteJid.split('@')[0]?.split(':')[0] ?? '';
+  const messageType = Object.keys(msg.message ?? {})[0] ?? 'unknown';
 
-  logger.log(`[${sessionId}] Mensaje entrante de ${remoteJid} (${messageType})`)
+  logger.log(
+    `[${sessionId}] Mensaje entrante de ${remoteJid} (${messageType})`,
+  );
 
   await webhook.dispatch('message.incoming', {
     sessionId,
@@ -82,5 +84,5 @@ async function processMessage(
     timestamp: Number(msg.messageTimestamp ?? 0),
     type: messageType,
     text,
-  })
+  });
 }

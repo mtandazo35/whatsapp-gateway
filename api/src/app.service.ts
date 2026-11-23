@@ -3,20 +3,19 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Queue } from 'bull';
 
 /** Id fijo: Bull deduplica los repetibles por (nombre, jobId, cron), asi cada reinicio no suma otro. */
-export const CLEAN_FILES_JOB_ID = 'clean-files-daily'
+export const CLEAN_FILES_JOB_ID = 'clean-files-daily';
 
 @Injectable()
 export class AppService implements OnModuleInit {
-
-  private readonly logger = new Logger(AppService.name)
+  private readonly logger = new Logger(AppService.name);
 
   constructor(
     @InjectQueue('clean-file-queue')
     private cleanFilesQueue: Queue,
-  ){}
+  ) {}
 
   async onModuleInit() {
-    await this.cleanFiles()
+    await this.cleanFiles();
   }
 
   /**
@@ -35,12 +34,13 @@ export class AppService implements OnModuleInit {
           repeat: { cron: '1 0 * * *' },
           removeOnFail: true,
           removeOnComplete: true,
-          attempts: 1
+          attempts: 1,
         },
       );
     } catch (error) {
-      this.logger.warn(`No se pudo programar la limpieza diaria: ${error?.message}`)
+      this.logger.warn(
+        `No se pudo programar la limpieza diaria: ${error?.message}`,
+      );
     }
   }
-
 }

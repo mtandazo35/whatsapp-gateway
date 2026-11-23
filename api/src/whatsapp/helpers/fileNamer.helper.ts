@@ -10,7 +10,11 @@ import { extname } from 'path';
  */
 type NamerCallback = (error: Error | null, filename: string) => void;
 
-export const fileNamer = (_req: Express.Request, file: Express.Multer.File, callback: NamerCallback) => {
+export const fileNamer = (
+  _req: Express.Request,
+  file: Express.Multer.File,
+  callback: NamerCallback,
+) => {
   if (!file) return callback(new Error('Archivo vacío'), '');
 
   ensureDirSync('./static');

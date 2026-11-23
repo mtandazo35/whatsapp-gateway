@@ -1,4 +1,15 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, Query, ParseUUIDPipe, Put } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Patch,
+  Param,
+  Delete,
+  Query,
+  ParseUUIDPipe,
+  Put,
+} from '@nestjs/common';
 import { SessionService } from './session.service';
 import { CreateSessionDto } from './dto/create-session.dto';
 import { UpdateSessionDto } from './dto/update-session.dto';
@@ -15,7 +26,10 @@ export class SessionController {
   constructor(private readonly sessionService: SessionService) {}
 
   @Post()
-  create(@Body() createSessionDto: CreateSessionDto, @GetUser() actor: AuthUser) {
+  create(
+    @Body() createSessionDto: CreateSessionDto,
+    @GetUser() actor: AuthUser,
+  ) {
     return this.sessionService.create(createSessionDto, actor);
   }
 

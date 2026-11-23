@@ -28,13 +28,11 @@ describe('API (e2e)', () => {
     return request(app.getHttpServer())
       .get('/api/health')
       .expect(200)
-      .expect(res => expect(res.body.status).toBe('ok'));
+      .expect((res) => expect(res.body.status).toBe('ok'));
   });
 
   it('GET /api/session exige token (401)', () => {
-    return request(app.getHttpServer())
-      .get('/api/session')
-      .expect(401);
+    return request(app.getHttpServer()).get('/api/session').expect(401);
   });
 
   it('POST /api/whatsapp/send exige token (401)', () => {
@@ -52,14 +50,19 @@ describe('API (e2e)', () => {
         .send({ email: 'nadie@prueba.local', password: 'Mala.Clave1' });
       codes.push(r.status);
     }
-    expect(codes.filter(c => c === 401).length).toBe(10);
+    expect(codes.filter((c) => c === 401).length).toBe(10);
     expect(codes.slice(10)).toEqual([429, 429]);
   });
 
   it('POST /api/user (alta) exige token (401)', () => {
     return request(app.getHttpServer())
       .post('/api/user')
-      .send({ email: 'x@y.z', password: 'Clave.Fuerte1', usuario: 'nuevo', rol: 'SUPER_ADMIN' })
+      .send({
+        email: 'x@y.z',
+        password: 'Clave.Fuerte1',
+        usuario: 'nuevo',
+        rol: 'SUPER_ADMIN',
+      })
       .expect(401);
   });
 });

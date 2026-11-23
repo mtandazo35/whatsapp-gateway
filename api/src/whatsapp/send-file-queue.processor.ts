@@ -1,9 +1,9 @@
 import * as fs from 'fs-extra';
 import { Job } from 'bull';
-import axios from 'axios'
-import { Buffer } from 'buffer'
-import { basename } from 'path'
-import * as mime from 'mime-types'
+import axios from 'axios';
+import { Buffer } from 'buffer';
+import { basename } from 'path';
+import * as mime from 'mime-types';
 import { Process, Processor } from '@nestjs/bull';
 import { MessagesService } from 'src/messages/messages.service';
 import { BadRequestException, Logger } from '@nestjs/common';
@@ -19,7 +19,7 @@ const SIZE_LIMITS_MB: Record<string, number> = {
   video: 64,
   audio: 16,
   document: 100,
-}
+};
 
 /**
  * Worker de envíos. Contrato con la API:
@@ -34,8 +34,7 @@ const SIZE_LIMITS_MB: Record<string, number> = {
  */
 @Processor('send-file')
 export class SendFileQueueProcessor {
-
-  private readonly logger = new Logger(SendFileQueueProcessor.name)
+  private readonly logger = new Logger(SendFileQueueProcessor.name);
 
   constructor(
     private readonly messageService: MessagesService,
@@ -46,18 +45,24 @@ export class SendFileQueueProcessor {
   /** Barrido periódico: mensajes queued viejos cuyo job ya no existe pasan a failed. */
   @Process('reapQueued')
   async reapQueued() {
-    const stale = await this.messageService.findStaleQueued(STALE_QUEUED_MS)
-    let marcados = 0
+    const stale = await this.messageService.findStaleQueued(STALE_QUEUED_MS);
+    let marcados = 0;
     for (const m of stale) {
-      const job = await this.queue.getJob(m.id)
-      const estado = job ? await job.getState() : null
+      const job = await this.queue.getJob(m.id);
+      const estado = job ? await job.getState() : null;
       if (!job || estado === 'completed' || estado === 'failed') {
-        await this.messageService.markFailed(m.id, `job perdido (${estado ?? 'sin job'}): la API se reinició o la cola se vació`)
-        marcados++
+        await this.messageService.markFailed(
+          m.id,
+          `job perdido (${estado ?? 'sin job'}): la API se reinició o la cola se vació`,
+        );
+        marcados++;
       }
     }
-    if (marcados) this.logger.warn(`barrido: ${marcados} mensaje(s) queued marcados como failed`)
-    return { marcados }
+    if (marcados)
+      this.logger.warn(
+        `barrido: ${marcados} mensaje(s) queued marcados como failed`,
+      );
+    return { marcados };
   }
 
   private getRecipientJid(number: string): string {
@@ -69,79 +74,112 @@ export class SendFileQueueProcessor {
     const sock = this.whatsAppSessionManager.getSocket(sessionId);
 
     if (!sock) {
-      throw new BadRequestException(`Socket no disponible para sesión ${sessionId}`);
+      throw new BadRequestException(
+        `Socket no disponible para sesión ${sessionId}`,
+      );
     }
 
     const state = this.whatsAppSessionManager.getSessionState(sessionId);
 
     if (state !== 'open') {
-      throw new BadRequestException(`Sesión ${sessionId} no está conectada (estado: ${state})`);
+      throw new BadRequestException(
+        `Sesión ${sessionId} no está conectada (estado: ${state})`,
+      );
     }
 
     return sock;
   }
 
   private isLastAttempt(job: Job): boolean {
-    const attempts = job.opts?.attempts ?? 1
-    return job.attemptsMade + 1 >= attempts
+    const attempts = job.opts?.attempts ?? 1;
+    return job.attemptsMade + 1 >= attempts;
   }
 
   /** La presencia es cosmética: nunca debe hacer fallar un envío. */
   private async presence(sock: any, ...args: any[]) {
     try {
-      await sock.sendPresenceUpdate(...args)
+      await sock.sendPresenceUpdate(...args);
     } catch (error) {
-      this.logger.debug(`sendPresenceUpdate falló: ${error?.message}`)
+      this.logger.debug(`sendPresenceUpdate falló: ${error?.message}`);
     }
   }
 
-  private async onFailure(job: Job, messageId: string, error: any, filePath?: string) {
+  private async onFailure(
+    job: Job,
+    messageId: string,
+    error: any,
+    filePath?: string,
+  ) {
     if (this.isLastAttempt(job)) {
-      await this.messageService.markFailed(messageId, error).catch(e =>
-        this.logger.warn(`no se pudo marcar failed ${messageId}: ${e?.message}`))
-      if (filePath) await fs.remove(filePath).catch(() => undefined)
+      await this.messageService
+        .markFailed(messageId, error)
+        .catch((e) =>
+          this.logger.warn(
+            `no se pudo marcar failed ${messageId}: ${e?.message}`,
+          ),
+        );
+      if (filePath) await fs.remove(filePath).catch(() => undefined);
     } else {
-      this.logger.warn(`[${job.data?.sessionId}] job ${job.id} falló (intento ${job.attemptsMade + 1}), se reintentará: ${error?.message}`)
+      this.logger.warn(
+        `[${job.data?.sessionId}] job ${job.id} falló (intento ${job.attemptsMade + 1}), se reintentará: ${error?.message}`,
+      );
     }
   }
 
   private async onSuccess(messageId: string, sent: any) {
-    const waMessageId: string | undefined = sent?.key?.id
+    const waMessageId: string | undefined = sent?.key?.id;
     try {
-      await this.messageService.markSent(messageId, waMessageId)
+      await this.messageService.markSent(messageId, waMessageId);
     } catch (error) {
       // El mensaje SÍ salió. Se registra y no se relanza: relanzar duplicaría el envío.
-      this.logger.error(`mensaje ${messageId} enviado (wa ${waMessageId}) pero no se pudo registrar: ${error?.message}`)
+      this.logger.error(
+        `mensaje ${messageId} enviado (wa ${waMessageId}) pero no se pudo registrar: ${error?.message}`,
+      );
     }
-    return { messageId, waMessageId }
+    return { messageId, waMessageId };
   }
 
   @Process('sendMessageText')
   async sendMessageText(job: Job) {
-    const { messageId, message, number, sessionId, fastMode = false } = job.data;
+    const {
+      messageId,
+      message,
+      number,
+      sessionId,
+      fastMode = false,
+    } = job.data;
 
     try {
       const sock = this.validateSocket(sessionId);
       const recipientJid = this.getRecipientJid(number);
 
-      let sent: any
+      let sent: any;
       if (fastMode) {
         sent = await sock.sendMessage(recipientJid, { text: message });
       } else {
-        sent = await this.sendMessageWithTypingSimulation(sock, recipientJid, message);
+        sent = await this.sendMessageWithTypingSimulation(
+          sock,
+          recipientJid,
+          message,
+        );
       }
 
-      const resultado = await this.onSuccess(messageId, sent)
-      await this.presence(sock, 'available')
-      return resultado
-
+      const resultado = await this.onSuccess(messageId, sent);
+      await this.presence(sock, 'available');
+      return resultado;
     } catch (error) {
-      await this.onFailure(job, messageId, error)
-      throw new BadRequestException(`Error al enviar mensaje: ${error.message}`);
+      await this.onFailure(job, messageId, error);
+      throw new BadRequestException(
+        `Error al enviar mensaje: ${error.message}`,
+      );
     }
   }
 
-  private async sendMessageWithTypingSimulation(sock: any, recipientJid: string, message: string): Promise<any> {
+  private async sendMessageWithTypingSimulation(
+    sock: any,
+    recipientJid: string,
+    message: string,
+  ): Promise<any> {
     const typingTime = this.calculateTypingTime(message);
     await this.presence(sock, 'composing', recipientJid);
     await this.delay(typingTime);
@@ -152,7 +190,15 @@ export class SendFileQueueProcessor {
 
   @Process('sendMessageFile')
   async sendMessageFile(job: Job) {
-    const { messageId, caption, number, sessionId, path, mimetype, originalname } = job.data;
+    const {
+      messageId,
+      caption,
+      number,
+      sessionId,
+      path,
+      mimetype,
+      originalname,
+    } = job.data;
 
     try {
       const sock = this.validateSocket(sessionId);
@@ -175,38 +221,53 @@ export class SendFileQueueProcessor {
         mimetype,
         fileName: originalname,
         caption,
-      })
+      });
 
-      await this.simulateBeforeSend(sock, recipientJid, type, caption, configMedia)
+      await this.simulateBeforeSend(
+        sock,
+        recipientJid,
+        type,
+        caption,
+        configMedia,
+      );
 
       const sent = await sock.sendMessage(recipientJid, configMedia);
 
-      const resultado = await this.onSuccess(messageId, sent)
-      await this.presence(sock, 'available')
-      await fs.remove(path).catch(() => undefined)
-      return resultado
-
+      const resultado = await this.onSuccess(messageId, sent);
+      await this.presence(sock, 'available');
+      await fs.remove(path).catch(() => undefined);
+      return resultado;
     } catch (error) {
-      await this.onFailure(job, messageId, error, path)
-      throw new BadRequestException(`Fallo al enviar el archivo: ${error.message}`);
+      await this.onFailure(job, messageId, error, path);
+      throw new BadRequestException(
+        `Fallo al enviar el archivo: ${error.message}`,
+      );
     }
   }
 
   @Process('sendMessageUrl')
   async sendMessageUrl(job: Job) {
-    const { messageId, caption, number, sessionId, mediaUrl, type, contentType } = job.data;
+    const {
+      messageId,
+      caption,
+      number,
+      sessionId,
+      mediaUrl,
+      type,
+      contentType,
+    } = job.data;
 
     try {
       const sock = this.validateSocket(sessionId);
       const recipientJid = this.getRecipientJid(number);
 
       // Se vuelve a validar aquí: el DNS pudo cambiar entre la API y el worker.
-      await assertSafeUrl(mediaUrl)
+      await assertSafeUrl(mediaUrl);
 
       await this.delay(this.getRandomDelay(1500, 3000));
       await this.presence(sock, 'available');
 
-      const limitMb = SIZE_LIMITS_MB[type] ?? SIZE_LIMITS_MB.document
+      const limitMb = SIZE_LIMITS_MB[type] ?? SIZE_LIMITS_MB.document;
       const response = await axios.get(mediaUrl, {
         responseType: 'arraybuffer',
         timeout: 30000,
@@ -214,7 +275,7 @@ export class SendFileQueueProcessor {
         maxContentLength: limitMb * 1024 * 1024,
         maxBodyLength: limitMb * 1024 * 1024,
         headers: { 'User-Agent': 'whatsapp-gateway/1.0' },
-        validateStatus: s => s >= 200 && s < 300,
+        validateStatus: (s) => s >= 200 && s < 300,
       });
 
       const fileBuffer = Buffer.from(response.data);
@@ -222,29 +283,39 @@ export class SendFileQueueProcessor {
 
       const pathname = new URL(mediaUrl).pathname;
       const cleanName = basename(pathname) || 'archivo';
-      const headerType = String(response.headers['content-type'] ?? '').split(';')[0].trim()
-      const mimeType = headerType
-        || contentType
-        || mime.lookup(cleanName)
-        || 'application/octet-stream';
+      const headerType = String(response.headers['content-type'] ?? '')
+        .split(';')[0]
+        .trim();
+      const mimeType =
+        headerType ||
+        contentType ||
+        mime.lookup(cleanName) ||
+        'application/octet-stream';
 
       const configMedia = await this.buildMedia(type, fileBuffer, {
         mimetype: mimeType,
         fileName: cleanName,
         caption,
-      })
+      });
 
-      await this.simulateBeforeSend(sock, recipientJid, type, caption, configMedia)
+      await this.simulateBeforeSend(
+        sock,
+        recipientJid,
+        type,
+        caption,
+        configMedia,
+      );
 
       const sent = await sock.sendMessage(recipientJid, configMedia);
 
-      const resultado = await this.onSuccess(messageId, sent)
-      await this.presence(sock, 'available')
-      return resultado
-
+      const resultado = await this.onSuccess(messageId, sent);
+      await this.presence(sock, 'available');
+      return resultado;
     } catch (error) {
-      await this.onFailure(job, messageId, error)
-      throw new BadRequestException(`Fallo al enviar multimedia: ${error.message}`);
+      await this.onFailure(job, messageId, error);
+      throw new BadRequestException(
+        `Fallo al enviar multimedia: ${error.message}`,
+      );
     }
   }
 
@@ -256,23 +327,32 @@ export class SendFileQueueProcessor {
     meta: { mimetype: string; fileName: string; caption?: string },
   ): Promise<any> {
     if (type === 'image') {
-      return { image: await this.compressImageIfNeeded(fileBuffer), caption: meta.caption || '' }
+      return {
+        image: await this.compressImageIfNeeded(fileBuffer),
+        caption: meta.caption || '',
+      };
     }
     if (type === 'audio') {
-      return { audio: fileBuffer, mimetype: 'audio/mp4', ptt: false }
+      return { audio: fileBuffer, mimetype: 'audio/mp4', ptt: false };
     }
     if (type === 'video') {
-      return { video: fileBuffer, caption: meta.caption || '' }
+      return { video: fileBuffer, caption: meta.caption || '' };
     }
     return {
       mimetype: meta.mimetype,
       fileName: meta.fileName,
       document: fileBuffer,
       caption: meta.caption || '',
-    }
+    };
   }
 
-  private async simulateBeforeSend(sock: any, recipientJid: string, type: string, caption: string | undefined, configMedia: any) {
+  private async simulateBeforeSend(
+    sock: any,
+    recipientJid: string,
+    type: string,
+    caption: string | undefined,
+    configMedia: any,
+  ) {
     if (type === 'audio') {
       await this.presence(sock, 'recording', recipientJid);
       await this.delay(this.getRandomDelay(2000, 5000));
@@ -299,14 +379,17 @@ export class SendFileQueueProcessor {
   }
 
   private delay(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   private calculateUploadTime(type: string, configMedia: any): number {
     switch (type) {
-      case 'image': return this.getRandomDelay(2000, 4000);
-      case 'video': return this.getRandomDelay(5000, 10000);
-      case 'audio': return this.getRandomDelay(2000, 5000);
+      case 'image':
+        return this.getRandomDelay(2000, 4000);
+      case 'video':
+        return this.getRandomDelay(5000, 10000);
+      case 'audio':
+        return this.getRandomDelay(2000, 5000);
       default:
         if (configMedia?.document) {
           const sizeInMB = configMedia.document.length / (1024 * 1024);
@@ -322,12 +405,15 @@ export class SendFileQueueProcessor {
 
     if (sizeInMB > maxSize) {
       throw new BadRequestException(
-        `Archivo muy grande (${sizeInMB.toFixed(2)}MB). Máximo permitido: ${maxSize}MB`
+        `Archivo muy grande (${sizeInMB.toFixed(2)}MB). Máximo permitido: ${maxSize}MB`,
       );
     }
   }
 
-  private async compressImageIfNeeded(buffer: Buffer, maxSizeKB: number = 500): Promise<Buffer> {
+  private async compressImageIfNeeded(
+    buffer: Buffer,
+    maxSizeKB: number = 500,
+  ): Promise<Buffer> {
     const sizeInKB = buffer.length / 1024;
 
     if (sizeInKB <= maxSizeKB) {
