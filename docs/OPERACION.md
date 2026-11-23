@@ -95,6 +95,24 @@ npm run migration:show                                          # [X] aplicadas,
    ```
 5. Las integraciones añaden `Authorization: Bearer` y tratan el 202 como "en cola".
 
+## Actualizar dependencias
+
+No hace falta node en el servidor ni en el PC. En GitHub: *Actions → Actualizar
+dependencias → Run workflow*, eligiendo la rama (normalmente una rama `deps/...`). El workflow:
+
+1. Borra y regenera `api/package-lock.json` según `package.json` (versiones y `overrides`).
+2. Aplica `npm audit fix` para lo que no rompe la API.
+3. Pasa prettier, compila, corre las unitarias y el lint.
+4. Exige que no quede ningún aviso alto o crítico en producción.
+5. Si todo pasa, commitea el lock (y el formato) en la misma rama. Luego se abre el PR y el CI
+   normal corre e2e y la imagen.
+
+Para subir una dependencia directa: editar la versión en `api/package.json`, hacer push de la
+rama y lanzar el workflow. Para una transitiva vulnerable que el paquete padre no ha subido:
+añadirla a `overrides` con la versión mínima parcheada.
+
+Después de fusionar: `git pull && sudo bash install.sh` en el servidor reconstruye la imagen.
+
 ## Respaldo y restauración
 
 `scripts/backup.sh` genera `data/backups/<fecha>/` con `whatsapp.dump` (pg_dump custom),

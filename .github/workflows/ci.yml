@@ -5,18 +5,20 @@ on:
     branches: [main]
   pull_request:
 
+# Cuatro jobs independientes: una auditoría de dependencias en rojo no debe ocultar
+# una regresión funcional (antes e2e y docker dependían del job que hacía el audit).
 jobs:
   api:
-    name: API (build, pruebas, auditoría)
+    name: API (build, pruebas, formato)
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: api
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: api/package-lock.json
       - name: Instalar (npm ci)
@@ -25,15 +27,34 @@ jobs:
         run: npm run build
       - name: Pruebas unitarias
         run: npx jest --ci --colors=false
-      - name: Lint (sin --fix)
-        run: npx eslint "src/**/*.ts" --max-warnings=0 || echo "::warning::eslint reporta avisos; revisar"
-      - name: Auditoría de dependencias (alta o crítica)
+      - name: Formato (prettier --check)
+        run: npm run format:check
+      - name: Lint
+        run: npm run lint -- --max-warnings=0
+
+  audit:
+    name: Auditoría de dependencias
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - name: npm audit (producción, alta o crítica)
         run: npm audit --omit=dev --audit-level=high
+      - name: npm audit (informativo, todo)
+        if: always()
+        run: npm audit --omit=dev || true
 
   e2e:
     name: e2e con Postgres y Redis
     runs-on: ubuntu-latest
-    needs: api
     services:
       postgres:
         image: postgres:16-alpine
@@ -67,10 +88,10 @@ jobs:
       run:
         working-directory: api
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: api/package-lock.json
       - run: npm ci --no-audit --no-fund
@@ -81,7 +102,7 @@ jobs:
     name: Scripts de shell
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: bash -n
         run: bash -n install.sh scripts/backup.sh scripts/restore.sh
       - name: shellcheck
@@ -95,8 +116,13 @@ jobs:
   docker:
     name: Imagen de la API
     runs-on: ubuntu-latest
-    needs: api
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: docker build
         run: docker build -t whatsapp-gateway-api:ci ./api
+      - name: La imagen arranca y falla limpio sin JWT_SECRET
+        run: |
+          set +e
+          out=$(docker run --rm whatsapp-gateway-api:ci 2>&1)
+          echo "$out" | tail -3
+          echo "$out" | grep -q "JWT_SECRET" && echo "OK: exige JWT_SECRET" || { echo "la imagen no valida JWT_SECRET"; exit 1; }
