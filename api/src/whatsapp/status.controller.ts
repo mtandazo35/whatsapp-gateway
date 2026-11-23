@@ -25,37 +25,64 @@ export class StatusController {
 
   @Get()
   async status() {
-    const [sessions, sendQueue, webhookQueue, cleanQueue, messages24h, webhookEvents] = await Promise.all([
+    const [
+      sessions,
+      sendQueue,
+      webhookQueue,
+      cleanQueue,
+      messages24h,
+      webhookEvents,
+    ] = await Promise.all([
       this.whatsapp.getAllSessionStates(),
       this.whatsapp.queueCounts(),
       this.webhookQueue.getJobCounts(),
       this.cleanQueue.getJobCounts(),
       this.messages.countsByStatus(24),
       this.webhook.counts(),
-    ])
+    ]);
 
-    const mem = process.memoryUsage()
-    const porEstado: Record<string, number> = {}
-    for (const s of sessions) porEstado[s.state] = (porEstado[s.state] ?? 0) + 1
+    const mem = process.memoryUsage();
+    const porEstado: Record<string, number> = {};
+    for (const s of sessions)
+      porEstado[s.state] = (porEstado[s.state] ?? 0) + 1;
 
     return {
       timestamp: new Date().toISOString(),
       uptimeSeconds: Math.round(process.uptime()),
-      memory: { rssMb: Math.round(mem.rss / 1048576), heapUsedMb: Math.round(mem.heapUsed / 1048576) },
+      memory: {
+        rssMb: Math.round(mem.rss / 1048576),
+        heapUsedMb: Math.round(mem.heapUsed / 1048576),
+      },
       sessions: { total: sessions.length, byState: porEstado, list: sessions },
-      queues: { send: sendQueue, webhook: webhookQueue, maintenance: cleanQueue },
+      queues: {
+        send: sendQueue,
+        webhook: webhookQueue,
+        maintenance: cleanQueue,
+      },
       messagesLast24h: messages24h,
       webhook: { ...this.webhook.config(), events: webhookEvents },
       alerts: this.alertas(sendQueue, webhookEvents, porEstado),
-    }
+    };
   }
 
-  private alertas(send: { waiting?: number; failed?: number }, wh: Record<string, number>, sesiones: Record<string, number>): string[] {
-    const out: string[] = []
-    if ((send.waiting ?? 0) > 100) out.push(`cola de envío con ${send.waiting} trabajos esperando`)
-    if ((send.failed ?? 0) > 50) out.push(`${send.failed} trabajos de envío fallidos conservados en Redis`)
-    if ((wh.failed ?? 0) > 0) out.push(`${wh.failed} evento(s) de webhook fallidos: revisa /webhooks/events?status=failed`)
-    if ((sesiones.connecting ?? 0) > 0) out.push(`${sesiones.connecting} sesión(es) en connecting`)
-    return out
+  private alertas(
+    send: { waiting?: number; failed?: number },
+    wh: Record<string, number>,
+    sesiones: Record<string, number>,
+  ): string[] {
+    const out: string[] = [];
+    if ((send.waiting ?? 0) > 100)
+      out.push(`cola de envío con ${send.waiting} trabajos esperando`);
+    if ((send.failed ?? 0) > 50)
+      out.push(
+        `${send.failed} trabajos de envío fallidos conservados en Redis`,
+      );
+    if ((wh.failed ?? 0) > 0)
+      out.push(
+        `${wh.failed} evento(s) de webhook fallidos: revisa /webhooks/events?status=failed`,
+      );
+    if ((sesiones.connecting ?? 0) > 0)
+      out.push(`${sesiones.connecting} sesión(es) en connecting`);
+    return out;
   }
 }

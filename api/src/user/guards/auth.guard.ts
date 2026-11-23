@@ -58,7 +58,13 @@ export class AuthGuard implements CanActivate {
 
     const user = await this.userRepository.findOne({
       where: { id: payload.id },
-      select: { id: true, email: true, usuario: true, rol: true, isActive: true },
+      select: {
+        id: true,
+        email: true,
+        usuario: true,
+        rol: true,
+        isActive: true,
+      },
     });
 
     if (!user) {

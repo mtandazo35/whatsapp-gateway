@@ -8,8 +8,8 @@ export class WebhookQueueProcessor {
 
   @Process('deliver')
   async deliver(job: Job<{ eventId: string }>) {
-    const attempts = job.opts?.attempts ?? 1
-    const isLast = job.attemptsMade + 1 >= attempts
-    await this.webhook.deliver(job.data.eventId, isLast)
+    const attempts = job.opts?.attempts ?? 1;
+    const isLast = job.attemptsMade + 1 >= attempts;
+    await this.webhook.deliver(job.data.eventId, isLast);
   }
 }

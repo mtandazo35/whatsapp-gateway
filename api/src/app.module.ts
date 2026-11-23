@@ -20,7 +20,9 @@ import { RATE_LIMIT } from './common/rate-limit';
     // Rate limit global por IP (detrás de Caddy, ver trust proxy en main.ts).
     // Los límites finos de login y envíos van con @Throttle en cada ruta.
     ThrottlerModule.forRoot({
-      throttlers: [{ name: 'default', ttl: 60_000, limit: RATE_LIMIT.globalPerMin }],
+      throttlers: [
+        { name: 'default', ttl: 60_000, limit: RATE_LIMIT.globalPerMin },
+      ],
       errorMessage: 'Demasiadas peticiones, espera un momento',
     }),
     WhatsappModule,
@@ -28,7 +30,7 @@ import { RATE_LIMIT } from './common/rate-limit';
       redis: {
         host: process.env.REDIS_HOST ?? 'localhost',
         port: +(process.env.REDIS_PORT ?? 6379),
-      }
+      },
     }),
     TypeOrmModule.forRoot({
       ...buildDataSourceOptions(),

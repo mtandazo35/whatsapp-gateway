@@ -19,7 +19,10 @@ export async function deleteFilesInFolder(carpeta: string) {
  * limpieza diaria de static/: los archivos recién subidos pueden estar en cola.
  * Devuelve cuántos borró.
  */
-export async function deleteOldFilesInFolder(carpeta: string, maxAgeMs: number): Promise<number> {
+export async function deleteOldFilesInFolder(
+  carpeta: string,
+  maxAgeMs: number,
+): Promise<number> {
   const exists = await fs.pathExists(carpeta);
   if (!exists) return 0;
 
@@ -44,9 +47,15 @@ export async function deleteOldFilesInFolder(carpeta: string, maxAgeMs: number):
 }
 
 /** Borra una lista de rutas sin lanzar (limpieza de subidas rechazadas). */
-export async function removeQuietly(rutas: (string | undefined | null)[]): Promise<void> {
+export async function removeQuietly(
+  rutas: (string | undefined | null)[],
+): Promise<void> {
   for (const ruta of rutas) {
     if (!ruta) continue;
-    try { await fs.remove(ruta) } catch { /* noop */ }
+    try {
+      await fs.remove(ruta);
+    } catch {
+      /* noop */
+    }
   }
 }

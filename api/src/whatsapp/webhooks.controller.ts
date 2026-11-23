@@ -1,4 +1,14 @@
-import { Controller, DefaultValuePipe, Get, NotFoundException, Param, ParseIntPipe, ParseUUIDPipe, Post, Query } from '@nestjs/common';
+import {
+  Controller,
+  DefaultValuePipe,
+  Get,
+  NotFoundException,
+  Param,
+  ParseIntPipe,
+  ParseUUIDPipe,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { Roles } from 'src/user/decorators';
 import { Rol } from 'src/user/dto/create-user.dto';
 import { WebhookService } from './webhook.service';
@@ -21,8 +31,14 @@ export class WebhooksController {
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
   ) {
-    const estado = ['pending', 'sent', 'failed'].includes(status ?? '') ? (status as WebhookEventStatus) : undefined;
-    return this.webhook.list(estado, Math.max(1, page), Math.min(Math.max(1, limit), 200));
+    const estado = ['pending', 'sent', 'failed'].includes(status ?? '')
+      ? (status as WebhookEventStatus)
+      : undefined;
+    return this.webhook.list(
+      estado,
+      Math.max(1, page),
+      Math.min(Math.max(1, limit), 200),
+    );
   }
 
   @Get('events/counts')

@@ -34,9 +34,9 @@ import { ThrottleSend } from 'src/common/rate-limit';
 import { MessagesService } from 'src/messages/messages.service';
 
 /** Límites de subida por petición (Caddy además corta el cuerpo en 25 MB). */
-export const UPLOAD_MAX_FILES = 10
-export const UPLOAD_MAX_FILE_BYTES = 25 * 1024 * 1024
-const IDEM_KEY_MAX = 128
+export const UPLOAD_MAX_FILES = 10;
+export const UPLOAD_MAX_FILE_BYTES = 25 * 1024 * 1024;
+const IDEM_KEY_MAX = 128;
 
 /**
  * Todas las rutas exigen token (guard global) y comprueban que el usuario sea
@@ -55,22 +55,30 @@ export class WhatsappController {
     private readonly idempotency: IdempotencyService,
   ) {}
 
-  private async sessionLista(sessionId: string, actor: AuthUser): Promise<Session> {
-    const session = await this.sessionService.findSessionForUser(sessionId, actor);
+  private async sessionLista(
+    sessionId: string,
+    actor: AuthUser,
+  ): Promise<Session> {
+    const session = await this.sessionService.findSessionForUser(
+      sessionId,
+      actor,
+    );
 
     if (!session.isActive)
-      throw new BadRequestException(`La sesión con el id ${ sessionId } se encuentra inactiva`)
+      throw new BadRequestException(
+        `La sesión con el id ${sessionId} se encuentra inactiva`,
+      );
 
-    return session
+    return session;
   }
 
   private numeroLimpio(raw: string): string {
-    const number = (raw ?? '').replace(/\D/g, "");
+    const number = (raw ?? '').replace(/\D/g, '');
 
     if (number.length < 10 || number.length > 15) {
       throw new BadRequestException(`Número inválido: ${raw}`);
     }
-    return number
+    return number;
   }
 
   /**
@@ -84,41 +92,54 @@ export class WhatsappController {
     payload: Record<string, any>,
     accion: () => Promise<T>,
   ): Promise<T | { status: string; message: string }> {
-    const idemKey = rawKey?.trim()
-    if (!idemKey) return accion()
-    if (idemKey.length > IDEM_KEY_MAX) throw new BadRequestException(`Idempotency-Key demasiado larga (máximo ${IDEM_KEY_MAX})`)
+    const idemKey = rawKey?.trim();
+    if (!idemKey) return accion();
+    if (idemKey.length > IDEM_KEY_MAX)
+      throw new BadRequestException(
+        `Idempotency-Key demasiado larga (máximo ${IDEM_KEY_MAX})`,
+      );
 
-    const key = `${sessionId}:${idemKey}`
-    const hash = hashPayload(payload)
-    const check = await this.idempotency.checkAndReserve(key, hash)
+    const key = `${sessionId}:${idemKey}`;
+    const hash = hashPayload(payload);
+    const check = await this.idempotency.checkAndReserve(key, hash);
 
     if (check.status === 'conflict')
-      throw new ConflictException('Esta Idempotency-Key ya se usó con otro cuerpo; usa una clave nueva')
+      throw new ConflictException(
+        'Esta Idempotency-Key ya se usó con otro cuerpo; usa una clave nueva',
+      );
     if (check.status === 'pending')
-      return { status: 'duplicate', message: 'Petición ya en proceso con la misma Idempotency-Key' }
-    if (check.status === 'done')
-      return check.response
+      return {
+        status: 'duplicate',
+        message: 'Petición ya en proceso con la misma Idempotency-Key',
+      };
+    if (check.status === 'done') return check.response;
 
     try {
-      const response = await accion()
-      await this.idempotency.store(key, hash, response)
-      return response
+      const response = await accion();
+      await this.idempotency.store(key, hash, response);
+      return response;
     } catch (err) {
-      await this.idempotency.release(key)
-      throw err
+      await this.idempotency.release(key);
+      throw err;
     }
   }
 
   @Get('/qr/:sessionId')
-  async getQR(@Param('sessionId') sessionId: string, @GetUser() actor: AuthUser) {
+  async getQR(
+    @Param('sessionId') sessionId: string,
+    @GetUser() actor: AuthUser,
+  ) {
     await this.sessionLista(sessionId, actor);
 
-    this.whatsappService.resetQrAttempts(sessionId)
+    this.whatsappService.resetQrAttempts(sessionId);
 
-    const state = this.whatsappService.getConnectionState(sessionId)
+    const state = this.whatsappService.getConnectionState(sessionId);
 
     if (state === 'open')
-      return { status: 'waiting', message: `La sesión ${sessionId} ya tiene vinculado WhatsApp` }
+      return {
+        status: 'waiting',
+        message: `La sesión ${sessionId} ya tiene vinculado WhatsApp`,
+      };
 
     await this.whatsappService.startSession(sessionId);
 
@@ -126,22 +147,28 @@ export class WhatsappController {
 
     if (!qr) {
       if (state === 'close')
-        return { status: 'disconnected', message: 'Sesión cerrada, reinicia para obtener nuevo QR' }
+        return {
+          status: 'disconnected',
+          message: 'Sesión cerrada, reinicia para obtener nuevo QR',
+        };
 
-      return { status: 'waiting', message: 'Ya conectado o QR aún no generado' }
+      return {
+        status: 'waiting',
+        message: 'Ya conectado o QR aún no generado',
+      };
     }
 
-    return { status: 'ok', qr }
+    return { status: 'ok', qr };
   }
 
   /** Estado en memoria de las sesiones visibles para el usuario. */
   @Get('/status-sessions')
   async statusSesion(@GetUser() actor: AuthUser) {
-    const visibles = await this.sessionService.visibleSessionIds(actor)
-    const states = await this.whatsappService.getAllSessionStates()
+    const visibles = await this.sessionService.visibleSessionIds(actor);
+    const states = await this.whatsappService.getAllSessionStates();
 
-    if (visibles === null) return states
-    return states.filter(s => visibles.has(s.sessionId))
+    if (visibles === null) return states;
+    return states.filter((s) => visibles.has(s.sessionId));
   }
 
   @ThrottleSend()
@@ -150,23 +177,35 @@ export class WhatsappController {
   async sendMessage(
     @Body() data: SendMessageDto,
     @Headers('idempotency-key') idempotencyKey: string | undefined,
-    @Query('fastMode', new DefaultValuePipe(false), ParseBoolPipe) fastMode: boolean,
+    @Query('fastMode', new DefaultValuePipe(false), ParseBoolPipe)
+    fastMode: boolean,
     @GetUser() actor: AuthUser,
   ) {
     const { sessionId, message } = data;
 
-    const session = await this.sessionLista(sessionId, actor)
-    const number = this.numeroLimpio(data.number)
+    const session = await this.sessionLista(sessionId, actor);
+    const number = this.numeroLimpio(data.number);
 
-    return this.conIdempotencia(sessionId, idempotencyKey, { sessionId, number, message, fastMode }, async () => {
-      const { messageId, jobId } = await this.whatsappService.sendMessage(session, number, message, fastMode, actor.id)
-      return {
-        status: 'queued',
-        message: `Mensaje aceptado para ${number}; consulta /api/messages/${messageId} para ver el estado`,
-        messageId,
-        jobId,
-      }
-    })
+    return this.conIdempotencia(
+      sessionId,
+      idempotencyKey,
+      { sessionId, number, message, fastMode },
+      async () => {
+        const { messageId, jobId } = await this.whatsappService.sendMessage(
+          session,
+          number,
+          message,
+          fastMode,
+          actor.id,
+        );
+        return {
+          status: 'queued',
+          message: `Mensaje aceptado para ${number}; consulta /api/messages/${messageId} para ver el estado`,
+          messageId,
+          jobId,
+        };
+      },
+    );
   }
 
   @ThrottleSend()
@@ -179,25 +218,35 @@ export class WhatsappController {
   ) {
     const { sessionId, mediaUrl, caption } = body;
 
-    const session = await this.sessionLista(sessionId, actor)
-    const number = this.numeroLimpio(body.number)
+    const session = await this.sessionLista(sessionId, actor);
+    const number = this.numeroLimpio(body.number);
 
-    return this.conIdempotencia(sessionId, idempotencyKey, { sessionId, number, mediaUrl, caption: caption ?? '' }, async () => {
-      const { messageId, jobId } = await this.whatsappService.sendMediaMessage(session, number, mediaUrl, caption, actor.id)
-      return {
-        status: 'queued',
-        message: 'El archivo se encuentra en cola de envío',
-        messageId,
-        jobId,
-      }
-    })
+    return this.conIdempotencia(
+      sessionId,
+      idempotencyKey,
+      { sessionId, number, mediaUrl, caption: caption ?? '' },
+      async () => {
+        const { messageId, jobId } =
+          await this.whatsappService.sendMediaMessage(
+            session,
+            number,
+            mediaUrl,
+            caption,
+            actor.id,
+          );
+        return {
+          status: 'queued',
+          message: 'El archivo se encuentra en cola de envío',
+          messageId,
+          jobId,
+        };
+      },
+    );
   }
 
   @ThrottleSend()
-  @UseInterceptors(FileFieldsInterceptor([
-    { name: 'files', maxCount: UPLOAD_MAX_FILES }
-  ],
-    {
+  @UseInterceptors(
+    FileFieldsInterceptor([{ name: 'files', maxCount: UPLOAD_MAX_FILES }], {
       fileFilter: fileFilter,
       limits: {
         files: UPLOAD_MAX_FILES,
@@ -206,12 +255,12 @@ export class WhatsappController {
       },
       storage: diskStorage({
         destination: function (_, __, cb) {
-          cb(null, `./static`)
+          cb(null, `./static`);
         },
-        filename: fileNamer
-      })
-    }
-  ))
+        filename: fileNamer,
+      }),
+    }),
+  )
   @Post('/send-media/file')
   @HttpCode(202)
   async sendMediaFromFile(
@@ -219,29 +268,35 @@ export class WhatsappController {
     @UploadedFiles() files: { files?: Express.Multer.File[] },
     @GetUser() actor: AuthUser,
   ) {
-    const subidos = files?.files ?? []
+    const subidos = files?.files ?? [];
 
     // multer ya escribió en disco: si algo de lo que sigue rechaza la petición,
     // se borran los archivos para no dejar huérfanos.
     try {
       if (subidos.length === 0)
-        throw new BadRequestException('Debes enviar al menos 1 archivo')
+        throw new BadRequestException('Debes enviar al menos 1 archivo');
 
       const { sessionId, caption } = body;
 
-      const session = await this.sessionLista(sessionId, actor)
-      const number = this.numeroLimpio(body.number)
+      const session = await this.sessionLista(sessionId, actor);
+      const number = this.numeroLimpio(body.number);
 
-      const queued = await this.whatsappService.sendMediaFiles(session, number, subidos, caption, actor.id)
+      const queued = await this.whatsappService.sendMediaFiles(
+        session,
+        number,
+        subidos,
+        caption,
+        actor.id,
+      );
 
       return {
         status: 'queued',
         message: `${queued.length} archivo(s) en cola de envío`,
         queued,
-      }
+      };
     } catch (err) {
-      await removeQuietly(subidos.map(f => f.path))
-      throw err
+      await removeQuietly(subidos.map((f) => f.path));
+      throw err;
     }
   }
 
@@ -249,26 +304,48 @@ export class WhatsappController {
   @ThrottleSend()
   @Post('/messages/:id/retry')
   @HttpCode(202)
-  async retry(@Param('id', ParseUUIDPipe) id: string, @GetUser() actor: AuthUser) {
-    const original = await this.messagesService.findOne(id, actor)
-    const session = await this.sessionLista(original.session.sessionId, actor)
-    const { messageId, jobId } = await this.whatsappService.retry(original, session, actor.id)
-    return { status: 'queued', message: `Reintento encolado; consulta /api/messages/${messageId}`, messageId, jobId, retryOf: id }
+  async retry(
+    @Param('id', ParseUUIDPipe) id: string,
+    @GetUser() actor: AuthUser,
+  ) {
+    const original = await this.messagesService.findOne(id, actor);
+    const session = await this.sessionLista(original.session.sessionId, actor);
+    const { messageId, jobId } = await this.whatsappService.retry(
+      original,
+      session,
+      actor.id,
+    );
+    return {
+      status: 'queued',
+      message: `Reintento encolado; consulta /api/messages/${messageId}`,
+      messageId,
+      jobId,
+      retryOf: id,
+    };
   }
 
   @Delete('/session/:sessionId')
-  async closeSession(@Param('sessionId') sessionId: string, @GetUser() actor: AuthUser) {
+  async closeSession(
+    @Param('sessionId') sessionId: string,
+    @GetUser() actor: AuthUser,
+  ) {
     await this.sessionService.findSessionForUser(sessionId, actor);
 
-    const result = await this.whatsappService.cancelSession(sessionId, 'sesión cerrada por el usuario')
-    return { status: 'ok', sessionId, result: { status: 'closed', ...result } }
+    const result = await this.whatsappService.cancelSession(
+      sessionId,
+      'sesión cerrada por el usuario',
+    );
+    return { status: 'ok', sessionId, result: { status: 'closed', ...result } };
   }
 
   @Get('session/:sessionId/info')
-  async getSessionInfo(@Param('sessionId') sessionId: string, @GetUser() actor: AuthUser) {
+  async getSessionInfo(
+    @Param('sessionId') sessionId: string,
+    @GetUser() actor: AuthUser,
+  ) {
     await this.sessionService.findSessionForUser(sessionId, actor);
 
-    return this.whatsappService.getSessionInfo(sessionId)
+    return this.whatsappService.getSessionInfo(sessionId);
   }
 
   @Get('check-number')
@@ -283,6 +360,9 @@ export class WhatsappController {
 
     await this.sessionService.findSessionForUser(sessionId, actor);
 
-    return this.whatsappService.checkIfNumberExists(sessionId, this.numeroLimpio(number));
+    return this.whatsappService.checkIfNumberExists(
+      sessionId,
+      this.numeroLimpio(number),
+    );
   }
 }

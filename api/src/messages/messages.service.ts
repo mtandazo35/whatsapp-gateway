@@ -32,11 +32,10 @@ const STATUS_RANK: Record<string, number> = {
 
 @Injectable()
 export class MessagesService {
-
   constructor(
-    @InjectRepository( Message )
-    private readonly messageRepository: Repository<Message>
-  ){}
+    @InjectRepository(Message)
+    private readonly messageRepository: Repository<Message>,
+  ) {}
 
   private baseQuery(): SelectQueryBuilder<Message> {
     return this.messageRepository
@@ -57,10 +56,12 @@ export class MessagesService {
       kind: input.kind,
       caption: input.caption ?? null,
       fastMode: !!input.fastMode,
-      requestedBy: input.requestedBy ? ({ id: input.requestedBy } as User) : null,
+      requestedBy: input.requestedBy
+        ? ({ id: input.requestedBy } as User)
+        : null,
       sent: false,
       status: 'queued',
-    })
+    });
     return await this.messageRepository.save(message);
   }
 
@@ -70,26 +71,35 @@ export class MessagesService {
       status: 'sent',
       waMessageId: waMessageId ?? null,
       lastError: null,
-    })
+    });
   }
 
   async markFailed(id: string, error: unknown): Promise<void> {
-    const texto = error instanceof Error ? error.message : String(error ?? 'error desconocido')
+    const texto =
+      error instanceof Error
+        ? error.message
+        : String(error ?? 'error desconocido');
     await this.messageRepository.update(id, {
       sent: false,
       status: 'failed',
       lastError: texto.slice(0, 500),
-    })
+    });
   }
 
   /** Mensajes en queued más viejos que maxAgeMs: candidatos a job perdido. */
-  async findStaleQueued(maxAgeMs: number, limit = 200): Promise<Pick<Message, 'id' | 'created_at'>[]> {
+  async findStaleQueued(
+    maxAgeMs: number,
+    limit = 200,
+  ): Promise<Pick<Message, 'id' | 'created_at'>[]> {
     return this.messageRepository.find({
-      where: { status: 'queued', created_at: LessThan(new Date(Date.now() - maxAgeMs)) },
+      where: {
+        status: 'queued',
+        created_at: LessThan(new Date(Date.now() - maxAgeMs)),
+      },
       select: { id: true, created_at: true },
       order: { created_at: 'ASC' },
       take: limit,
-    })
+    });
   }
 
   /** Mensajes queued de una sesión (para cancelarlos al desactivarla). */
@@ -100,7 +110,7 @@ export class MessagesService {
       .select(['m.id'])
       .where('m.status = :st', { st: 'queued' })
       .andWhere('s.sessionId = :sid', { sid: sessionId })
-      .getMany()
+      .getMany();
   }
 
   /** Conteo por estado en las últimas `horas` horas (para /status). */
@@ -109,27 +119,33 @@ export class MessagesService {
       .createQueryBuilder('m')
       .select('m.status', 'status')
       .addSelect('count(*)', 'n')
-      .where('m.created_at > :desde', { desde: new Date(Date.now() - horas * 3600_000) })
+      .where('m.created_at > :desde', {
+        desde: new Date(Date.now() - horas * 3600_000),
+      })
       .groupBy('m.status')
-      .getRawMany<{ status: string; n: string }>()
-    const out: Record<string, number> = {}
-    for (const r of rows) out[r.status] = Number(r.n)
-    return out
+      .getRawMany<{ status: string; n: string }>();
+    const out: Record<string, number> = {};
+    for (const r of rows) out[r.status] = Number(r.n);
+    return out;
   }
 
   /**
    * Aplica un ACK de WhatsApp solo si avanza el estado (read no vuelve a sent)
    * y solo sobre mensajes de esa sesión.
    */
-  async applyAck(sessionId: string, waMessageId: string, status: string): Promise<boolean> {
-    const rank = STATUS_RANK[status]
-    if (rank === undefined) return false
+  async applyAck(
+    sessionId: string,
+    waMessageId: string,
+    status: string,
+  ): Promise<boolean> {
+    const rank = STATUS_RANK[status];
+    if (rank === undefined) return false;
 
     const menores = Object.entries(STATUS_RANK)
       .filter(([, r]) => r < rank)
-      .map(([s]) => s)
+      .map(([s]) => s);
 
-    if (menores.length === 0) return false
+    if (menores.length === 0) return false;
 
     const result = await this.messageRepository
       .createQueryBuilder()
@@ -137,10 +153,13 @@ export class MessagesService {
       .set({ status, sent: rank >= STATUS_RANK.sent })
       .where('wa_message_id = :waMessageId', { waMessageId })
       .andWhere('status IN (:...menores)', { menores })
-      .andWhere('session_id IN (SELECT id FROM sessions WHERE "sessionId" = :sessionId)', { sessionId })
-      .execute()
+      .andWhere(
+        'session_id IN (SELECT id FROM sessions WHERE "sessionId" = :sessionId)',
+        { sessionId },
+      )
+      .execute();
 
-    return (result.affected ?? 0) > 0
+    return (result.affected ?? 0) > 0;
   }
 
   async findAll(paginationDto: FilterMessageDto, actor: AuthUser) {
@@ -159,7 +178,7 @@ export class MessagesService {
     if (filter) {
       query.andWhere(
         '(m.message ILIKE :filtro OR session.nameSession ILIKE :filtro OR m.receptor ILIKE :filtro)',
-        { filtro: `%${filter}%` }
+        { filtro: `%${filter}%` },
       );
     }
 
@@ -172,7 +191,9 @@ export class MessagesService {
       if (isUUID(session)) {
         query.andWhere('session.id = :sessionUuid', { sessionUuid: session });
       } else {
-        query.andWhere('session.sessionId = :sessionShort', { sessionShort: session });
+        query.andWhere('session.sessionId = :sessionShort', {
+          sessionShort: session,
+        });
       }
     }
 
@@ -195,15 +216,13 @@ export class MessagesService {
   }
 
   async findOne(id: string, actor: AuthUser) {
-    const message = await this.baseQuery()
-      .where('m.id = :id', { id })
-      .getOne();
+    const message = await this.baseQuery().where('m.id = :id', { id }).getOne();
 
     if (!message)
-      throw new NotFoundException(`No se encontró el mensaje con el id ${ id }`)
+      throw new NotFoundException(`No se encontró el mensaje con el id ${id}`);
 
     if (!isAdmin(actor) && message.session?.owner?.id !== actor.id)
-      throw new NotFoundException(`No se encontró el mensaje con el id ${ id }`)
+      throw new NotFoundException(`No se encontró el mensaje con el id ${id}`);
 
     return message;
   }

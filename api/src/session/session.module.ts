@@ -8,13 +8,7 @@ import { SessionEventsService } from './session-events.service';
 @Module({
   controllers: [SessionController],
   providers: [SessionService, SessionEventsService],
-  imports: [
-    TypeOrmModule.forFeature([ Session ]),
-  ],
-  exports: [
-    SessionService,
-    SessionEventsService,
-    TypeOrmModule
-  ]
+  imports: [TypeOrmModule.forFeature([Session])],
+  exports: [SessionService, SessionEventsService, TypeOrmModule],
 })
 export class SessionModule {}

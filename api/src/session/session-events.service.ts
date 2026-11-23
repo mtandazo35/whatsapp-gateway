@@ -10,9 +10,17 @@ import { EventEmitter } from 'events';
 export class SessionEventsService {
   private readonly emitter = new EventEmitter();
 
-  emitDeactivated(sessionId: string) { this.emitter.emit('deactivated', sessionId); }
-  emitDeleted(sessionId: string) { this.emitter.emit('deleted', sessionId); }
+  emitDeactivated(sessionId: string) {
+    this.emitter.emit('deactivated', sessionId);
+  }
+  emitDeleted(sessionId: string) {
+    this.emitter.emit('deleted', sessionId);
+  }
 
-  onDeactivated(cb: (sessionId: string) => void) { this.emitter.on('deactivated', cb); }
-  onDeleted(cb: (sessionId: string) => void) { this.emitter.on('deleted', cb); }
+  onDeactivated(cb: (sessionId: string) => void) {
+    this.emitter.on('deactivated', cb);
+  }
+  onDeleted(cb: (sessionId: string) => void) {
+    this.emitter.on('deleted', cb);
+  }
 }

@@ -9,6 +9,8 @@ export interface AuthUser {
   isActive: boolean;
 }
 
-export function isAdmin(user: Pick<AuthUser, 'rol'> | null | undefined): boolean {
+export function isAdmin(
+  user: Pick<AuthUser, 'rol'> | null | undefined,
+): boolean {
   return !!user && (user.rol === Rol.ADMIN || user.rol === Rol.SUPER_ADMIN);
 }

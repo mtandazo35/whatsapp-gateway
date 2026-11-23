@@ -1,4 +1,9 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { CreateSessionDto } from './dto/create-session.dto';
 import { UpdateSessionDto } from './dto/update-session.dto';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -13,12 +18,11 @@ import { SessionEventsService } from './session-events.service';
 
 @Injectable()
 export class SessionService {
-
   constructor(
-    @InjectRepository( Session )
+    @InjectRepository(Session)
     private readonly sesionRepository: Repository<Session>,
     private readonly events: SessionEventsService,
-  ){}
+  ) {}
 
   /** Consulta base: trae el dueño solo con id y email (nunca el hash de contraseña). */
   private baseQuery(): SelectQueryBuilder<Session> {
@@ -43,7 +47,7 @@ export class SessionService {
       sessionId = randomUUID().replace(/-/g, '').substring(0, 12);
 
       const existingSession = await this.sesionRepository.findOne({
-        where: { sessionId }
+        where: { sessionId },
       });
 
       if (!existingSession) isUnique = true;
@@ -73,7 +77,7 @@ export class SessionService {
     if (filter) {
       query.andWhere(
         '(s.nameSession ILIKE :filtro OR s.numberSession ILIKE :filtro OR s.sessionId ILIKE :filtro)',
-        { filtro: `%${filter}%` }
+        { filtro: `%${filter}%` },
       );
     }
 
@@ -108,7 +112,7 @@ export class SessionService {
     const session = await query.getOne();
 
     if (!session)
-      throw new NotFoundException(`No se encontró la sesión con el id ${ id }`)
+      throw new NotFoundException(`No se encontró la sesión con el id ${id}`);
 
     if (actor) this.assertAccess(session, actor);
 
@@ -123,11 +127,16 @@ export class SessionService {
   }
 
   /** Por sessionId corto, exigiendo que el actor pueda usarla. */
-  async findSessionForUser(sessionId: string, actor: AuthUser): Promise<Session> {
+  async findSessionForUser(
+    sessionId: string,
+    actor: AuthUser,
+  ): Promise<Session> {
     const session = await this.findSession(sessionId);
 
     if (!session)
-      throw new BadRequestException(`No existe una sesión con el id ${ sessionId }, por favor comunicarte con el administrador`)
+      throw new BadRequestException(
+        `No existe una sesión con el id ${sessionId}, por favor comunicarte con el administrador`,
+      );
 
     this.assertAccess(session, actor);
     return session;
@@ -144,10 +153,14 @@ export class SessionService {
       .where('owner.id = :uid', { uid: actor.id })
       .getRawMany<{ sessionId: string }>();
 
-    return new Set(rows.map(r => r.sessionId));
+    return new Set(rows.map((r) => r.sessionId));
   }
 
-  async update(id: string, updateSessionDto: UpdateSessionDto, actor: AuthUser) {
+  async update(
+    id: string,
+    updateSessionDto: UpdateSessionDto,
+    actor: AuthUser,
+  ) {
     const session = await this.findOne(id, actor);
 
     await this.sesionRepository.update(session.id, updateSessionDto);
@@ -183,7 +196,9 @@ export class SessionService {
     });
 
     if (!session || !session.deleted_at) {
-      throw new NotFoundException(`Sesión con ID ${id} no encontrada o no estaba eliminada`);
+      throw new NotFoundException(
+        `Sesión con ID ${id} no encontrada o no estaba eliminada`,
+      );
     }
 
     this.assertAccess(session as Session, actor);

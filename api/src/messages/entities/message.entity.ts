@@ -1,6 +1,16 @@
-import { Session } from "src/session/entities/session.entity";
-import { User } from "src/user/entities/user.entity";
-import { Column, CreateDateColumn, DeleteDateColumn, Entity, Index, JoinColumn, ManyToOne, PrimaryGeneratedColumn, UpdateDateColumn } from "typeorm";
+import { Session } from 'src/session/entities/session.entity';
+import { User } from 'src/user/entities/user.entity';
+import {
+  Column,
+  CreateDateColumn,
+  DeleteDateColumn,
+  Entity,
+  Index,
+  JoinColumn,
+  ManyToOne,
+  PrimaryGeneratedColumn,
+  UpdateDateColumn,
+} from 'typeorm';
 
 /**
  * Estados del ciclo de vida de un envío:
@@ -12,14 +22,22 @@ import { Column, CreateDateColumn, DeleteDateColumn, Entity, Index, JoinColumn, 
  *   failed     -> el worker agotó los intentos; ver lastError
  *   error      -> WhatsApp reportó error para ese mensaje
  */
-export type MessageStatus = 'queued' | 'sent' | 'delivered' | 'read' | 'played' | 'failed' | 'error' | 'pending' | string;
+export type MessageStatus =
+  | 'queued'
+  | 'sent'
+  | 'delivered'
+  | 'read'
+  | 'played'
+  | 'failed'
+  | 'error'
+  | 'pending'
+  | string;
 
 /** text: mensaje de texto; media_url: archivo descargado de una URL; file: archivo subido por multipart. */
 export type MessageKind = 'text' | 'media_url' | 'file';
 
 @Entity('messages')
 export class Message {
-
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
@@ -53,7 +71,12 @@ export class Message {
   sent: boolean;
 
   @Index()
-  @Column({ type: 'varchar', length: 128, nullable: true, name: 'wa_message_id' })
+  @Column({
+    type: 'varchar',
+    length: 128,
+    nullable: true,
+    name: 'wa_message_id',
+  })
   waMessageId: string;
 
   @Column({ type: 'varchar', length: 32, default: 'queued' })
