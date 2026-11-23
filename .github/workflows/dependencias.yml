@@ -43,7 +43,9 @@ jobs:
 
       - name: npm audit fix (no rompedor)
         if: ${{ inputs.audit_fix }}
-        run: npm audit fix --omit=dev --no-fund || true
+        # Sin --omit=dev: con esa opcion npm desinstala las devDependencies (nest, jest) y la
+        # compilacion falla con exit 127.
+        run: npm audit fix --no-fund || true
 
       - name: Formatear con prettier
         if: ${{ inputs.formatear }}
