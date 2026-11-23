@@ -15,6 +15,10 @@ Mantenimiento: dependencias y CI. Sin cambios funcionales.
   limit), `path-to-regexp`, `qs`, `body-parser`, `validator`, `ws`, `lodash`, `brace-expansion`.
 - `package-lock.json` regenerado y `npm audit fix` aplicado desde GitHub Actions.
 - Código formateado con prettier una vez, para que el lint vuelva a fallar solo por errores reales.
+- `@nestjs/mapped-types` fijado a `^2.x`: con `*` resolvía a la última major, solo ESM, que Jest
+  no puede cargar.
+- Corregido un bug latente: `import mime from 'mime-types'` quedaba `undefined` en runtime (no
+  hay `esModuleInterop`); ahora `import * as mime`.
 
 ### CI
 
@@ -23,6 +27,9 @@ Mantenimiento: dependencias y CI. Sin cambios funcionales.
   nunca llegaron a ejecutarse.
 - Actions `checkout@v5` y `setup-node@v5` con Node 22 (las v4 estaban en deprecación).
 - La imagen construida se arranca sin `JWT_SECRET` y se comprueba que falla limpio.
+- e2e: alias `src/` en `test/jest-e2e.json`, timeout de arranque de 90 s y
+  `NODE_OPTIONS=--experimental-vm-modules` para el `import()` dinámico de Baileys. Es la primera
+  vez que el e2e corre en GitHub.
 - Nuevo workflow manual **Actualizar dependencias**: regenera el lock, aplica `npm audit fix`,
   formatea, compila, prueba y commitea en la rama. Es la forma de actualizar sin instalar node
   en ninguna máquina del operador (ver `docs/OPERACION.md`).
