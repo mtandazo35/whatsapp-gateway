@@ -113,6 +113,23 @@ añadirla a `overrides` con la versión mínima parcheada.
 
 Después de fusionar: `git pull && sudo bash install.sh` en el servidor reconstruye la imagen.
 
+### Dependabot
+
+Activado en el repositorio (ajustes de GitHub) y configurado en `.github/dependabot.yml`:
+
+- **Alertas y parches de seguridad**: cuando GitHub publica un aviso que afecta al lock,
+  Dependabot abre un PR con la versión parcheada, sin esperar al lunes.
+- **Actualizaciones semanales** (lunes 06:00, hora de Ecuador): un PR con los `minor`/`patch`
+  de producción agrupados, otro con los de desarrollo, y uno por cada `major`. También vigila
+  las imágenes base de los Dockerfile (`node`, `caddy`) y las versiones de las GitHub Actions.
+- **Excluido**: Baileys (release candidate, se sube a mano probando con un número real) y los
+  `major` de `@nestjs/*` (Nest 11+ exige Express 5 y cambios de código).
+- También queda activado el escaneo de secretos con protección en el push.
+
+Cada PR pasa el CI completo (API, auditoría, e2e, shell, imagen). Si está verde, fusionar;
+si una actualización rompe algo, cerrar el PR con un comentario `@dependabot ignore this
+major version` o `@dependabot ignore this dependency` para que no insista.
+
 ## Respaldo y restauración
 
 `scripts/backup.sh` genera `data/backups/<fecha>/` con `whatsapp.dump` (pg_dump custom),

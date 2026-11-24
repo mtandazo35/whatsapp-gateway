@@ -1,0 +1,54 @@
+# Dependabot: PRs automáticos de actualización, agrupados para no inundar el repo.
+# Las alertas de seguridad y los parches de seguridad se activan en los ajustes del
+# repositorio (Settings > Code security), no aquí. Ver docs/OPERACION.md.
+version: 2
+updates:
+  # API (npm). Un PR semanal con los parches/minor agrupados; los major van en PR aparte.
+  - package-ecosystem: npm
+    directory: /api
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: America/Guayaquil
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: deps
+    labels: [dependencias]
+    groups:
+      produccion-menores:
+        dependency-type: production
+        update-types: [minor, patch]
+      desarrollo:
+        dependency-type: development
+        update-types: [minor, patch]
+    ignore:
+      # Baileys va en release candidate; se sube a mano probando con un número real.
+      - dependency-name: "@whiskeysockets/baileys"
+      # NestJS 11+ exige Express 5 y cambios de código: migración planificada, no automática.
+      - dependency-name: "@nestjs/*"
+        update-types: [version-update:semver-major]
+
+  # Imágenes base de los Dockerfile (node, caddy).
+  - package-ecosystem: docker
+    directories: [/api, /web]
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: America/Guayaquil
+    commit-message:
+      prefix: docker
+    labels: [dependencias]
+
+  # Acciones de los workflows.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: America/Guayaquil
+    commit-message:
+      prefix: ci
+    labels: [dependencias]

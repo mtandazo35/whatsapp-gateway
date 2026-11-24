@@ -3,6 +3,12 @@
 Formato: una entrada por versión con lo que cambia para quien opera o integra el gateway.
 La versión está en `api/package.json`.
 
+## Sin publicar
+
+- Dependabot activado: alertas y parches de seguridad, actualizaciones semanales agrupadas de
+  npm, Docker y GitHub Actions (`.github/dependabot.yml`). Escaneo de secretos con protección en
+  el push. Ver `docs/OPERACION.md`.
+
 ## 0.3.1 — 2026-11-23
 
 Mantenimiento: dependencias y CI. Sin cambios funcionales.
