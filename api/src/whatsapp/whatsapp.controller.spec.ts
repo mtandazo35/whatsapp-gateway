@@ -28,7 +28,10 @@ describe('WhatsappController (número destino)', () => {
   beforeEach(() => {
     whatsapp = {
       checkIfNumberExists: jest.fn(),
-      sendMessage: jest.fn().mockResolvedValue({ messageId: 'm1', jobId: 'm1' }),
+      sendMessage: jest.fn().mockResolvedValue({
+        messageId: 'm1',
+        jobId: 'm1',
+      }),
       retry: jest.fn().mockResolvedValue({ messageId: 'm2', jobId: 'm2' }),
     };
     sessions = { findSessionForUser: jest.fn().mockResolvedValue(session) };
@@ -44,7 +47,10 @@ describe('WhatsappController (número destino)', () => {
   const dto = { sessionId: 's1', number: '5939426672', message: 'hola' } as any;
 
   it('400 y nada encolado si el número no tiene WhatsApp', async () => {
-    whatsapp.checkIfNumberExists.mockResolvedValue({ exists: false, jid: null });
+    whatsapp.checkIfNumberExists.mockResolvedValue({
+      exists: false,
+      jid: null,
+    });
     await expect(
       ctrl.sendMessage(dto, undefined, false, actor as any),
     ).rejects.toBeInstanceOf(BadRequestException);
@@ -82,7 +88,10 @@ describe('WhatsappController (número destino)', () => {
       receptor: '5939426672',
       session: { sessionId: 's1' },
     });
-    whatsapp.checkIfNumberExists.mockResolvedValue({ exists: false, jid: null });
+    whatsapp.checkIfNumberExists.mockResolvedValue({
+      exists: false,
+      jid: null,
+    });
     await expect(
       ctrl.retry('0b1f0000-0000-4000-8000-000000000000', actor as any),
     ).rejects.toBeInstanceOf(BadRequestException);
