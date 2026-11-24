@@ -3,7 +3,10 @@
 Formato: una entrada por versión con lo que cambia para quien opera o integra el gateway.
 La versión está en `api/package.json`.
 
-## Sin publicar
+## 0.4.0 — 2026-11-23
+
+Primer despliegue con número real. Validación del destinatario en dos capas (panel y API),
+modo sin login opcional y Dependabot. Actualizar: `git pull && sudo bash install.sh`.
 
 - Panel: selector de país junto a cada campo de número (envíos, archivo, URL y verificar).
   Completa el código de país y valida la cantidad de dígitos del número nacional antes de
@@ -21,6 +24,12 @@ La versión está en `api/package.json`.
 - Dependabot activado: alertas y parches de seguridad, actualizaciones semanales agrupadas de
   npm, Docker y GitHub Actions (`.github/dependabot.yml`). Escaneo de secretos con protección en
   el push. Ver `docs/OPERACION.md`.
+- Dependencias fusionadas desde Dependabot: `class-validator` 0.15, `tmp` y `webpack`
+  parcheados vía `@nestjs/cli`, imagen base `node:26-bookworm-slim`, `actions/checkout` y
+  `actions/setup-node` v7. Los majors de eslint, typeorm, ioredis, typescript-eslint y Nest
+  quedan ignorados hasta migrarlos a propósito.
+- Jest unitario resuelve el alias `src/` igual que el e2e (antes un spec que importara el
+  controlador no arrancaba).
 
 ## 0.3.1 — 2026-11-23
 
