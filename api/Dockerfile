@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.6
 
 # Dependencias completas (compila TypeScript). npm ci = reproducible desde package-lock.json.
-FROM node:20-bookworm-slim AS deps
+FROM node:26-bookworm-slim AS deps
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
       python3 make g++ ca-certificates \
@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
 
-FROM node:20-bookworm-slim AS builder
+FROM node:26-bookworm-slim AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
@@ -19,7 +19,7 @@ RUN npm run build
 FROM deps AS prod-deps
 RUN npm prune --omit=dev --no-audit --no-fund && npm cache clean --force
 
-FROM node:20-bookworm-slim AS runner
+FROM node:26-bookworm-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 RUN apt-get update && apt-get install -y --no-install-recommends \
