@@ -5,6 +5,10 @@ La versión está en `api/package.json`.
 
 ## Sin publicar
 
+- `AUTH_DISABLED=true`: modo sin login para el panel y la API. Una petición sin token actúa
+  como el primer `SUPER_ADMIN` activo; con token se valida igual que antes. El frontend lo
+  detecta al cargar y no muestra el modal. La API avisa en el log al arrancar. Pensado solo
+  para URLs restringidas por red; ver `docs/SEGURIDAD.md`.
 - Dependabot activado: alertas y parches de seguridad, actualizaciones semanales agrupadas de
   npm, Docker y GitHub Actions (`.github/dependabot.yml`). Escaneo de secretos con protección en
   el push. Ver `docs/OPERACION.md`.

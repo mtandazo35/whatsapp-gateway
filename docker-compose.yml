@@ -59,6 +59,8 @@ services:
       RATE_LIMIT_SEND_PER_MIN: ${RATE_LIMIT_SEND_PER_MIN:-120}
       JWT_SECRET: ${JWT_SECRET}
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-8h}
+      # true = panel y API sin login (peticiones sin token actúan como SUPER_ADMIN). Ver docs/SEGURIDAD.md.
+      AUTH_DISABLED: ${AUTH_DISABLED:-false}
       # Administrador inicial: solo se usa si la tabla de usuarios esta vacia.
       ADMIN_EMAIL: ${ADMIN_EMAIL:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}

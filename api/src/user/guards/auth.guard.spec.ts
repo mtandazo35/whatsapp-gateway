@@ -43,6 +43,11 @@ describe('AuthGuard', () => {
       repo as any,
     );
     process.env.JWT_SECRET = 'x'.repeat(32);
+    delete process.env.AUTH_DISABLED;
+  });
+
+  afterAll(() => {
+    delete process.env.AUTH_DISABLED;
   });
 
   function metadata(opts: { publica?: boolean; roles?: Rol[] }) {
@@ -110,6 +115,66 @@ describe('AuthGuard', () => {
     await expect(
       guard.canActivate(contextoCon('Bearer ok')),
     ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  describe('AUTH_DISABLED=true', () => {
+    const admin = {
+      id: 'adm',
+      email: 'admin@x.y',
+      usuario: 'admin',
+      rol: Rol.SUPER_ADMIN,
+      isActive: true,
+      password: 'hash',
+    };
+
+    beforeEach(() => {
+      process.env.AUTH_DISABLED = 'true';
+    });
+
+    it('sin token actúa como el SUPER_ADMIN activo (sin contraseña)', async () => {
+      metadata({ roles: [Rol.ADMIN, Rol.SUPER_ADMIN] });
+      repo.findOne.mockResolvedValue(admin);
+      const ctx = contextoCon();
+      await expect(guard.canActivate(ctx)).resolves.toBe(true);
+      const user = (ctx as any)._request.user;
+      expect(user.id).toBe('adm');
+      expect(user.rol).toBe(Rol.SUPER_ADMIN);
+      expect(user.password).toBeUndefined();
+      expect(jwt.verifyAsync).not.toHaveBeenCalled();
+    });
+
+    it('cachea el admin: dos peticiones, una consulta', async () => {
+      metadata({});
+      repo.findOne.mockResolvedValue(admin);
+      await guard.canActivate(contextoCon());
+      await guard.canActivate(contextoCon());
+      expect(repo.findOne).toHaveBeenCalledTimes(1);
+    });
+
+    it('401 si no queda ningún SUPER_ADMIN activo', async () => {
+      metadata({});
+      repo.findOne.mockResolvedValue(null);
+      await expect(guard.canActivate(contextoCon())).rejects.toBeInstanceOf(
+        UnauthorizedException,
+      );
+    });
+
+    it('con token sigue validando el token (usuario del token, no el admin)', async () => {
+      metadata({});
+      jwt.verifyAsync.mockResolvedValue({ id: 'u1' });
+      repo.findOne.mockResolvedValue(usuarioActivo);
+      const ctx = contextoCon('Bearer ok');
+      await expect(guard.canActivate(ctx)).resolves.toBe(true);
+      expect((ctx as any)._request.user.id).toBe('u1');
+    });
+
+    it('con token inválido responde 401 aunque el modo esté activo', async () => {
+      metadata({});
+      jwt.verifyAsync.mockRejectedValue(new Error('bad'));
+      await expect(
+        guard.canActivate(contextoCon('Bearer malo')),
+      ).rejects.toBeInstanceOf(UnauthorizedException);
+    });
   });
 
   it('pasa si el rol está en @Roles()', async () => {

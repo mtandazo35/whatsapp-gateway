@@ -61,6 +61,8 @@ sesiones, 200 en mensajes). Devuelven:
 
 ### `POST /user/login` 🔓
 
+Con `AUTH_DISABLED=true` en el servidor, las peticiones sin `Authorization` se aceptan como el administrador; las que llevan token se validan igual. Ver `docs/SEGURIDAD.md`.
+
 ```bash
 curl -s -X POST https://<dominio>/api/user/login \
   -H "Content-Type: application/json" \

@@ -5,6 +5,8 @@ let qrTimer = null;
 let refreshing = false;
 let activeSessionId = localStorage.getItem('wa.sessionId') || null;
 let token = localStorage.getItem('wa.token') || null;
+// true cuando el servidor corre con AUTH_DISABLED: no hay login ni modal.
+let publicMode = false;
 let currentUser = null;
 let lastInfoFor = null;   // sessionId para el que ya se pidio /info estando open
 let sessionsCache = [];   // sesiones visibles (para el selector)
@@ -68,7 +70,7 @@ async function api(method, path, body, isForm = false, extraHeaders = {}) {
   const r = await fetch(API + path, opts);
   const text = await r.text();
   let data; try { data = JSON.parse(text); } catch { data = text; }
-  if (r.status === 401 && !path.startsWith('/user/login')) {
+  if (r.status === 401 && !path.startsWith('/user/login') && !publicMode) {
     setToken(null);
     showLogin();
   }
@@ -118,6 +120,7 @@ function loginModal() {
 }
 
 function showLogin() {
+  if (publicMode) return;
   currentUser = null;
   document.getElementById('userBadge').classList.add('d-none');
   document.getElementById('btnLogout').classList.add('d-none');
@@ -131,21 +134,39 @@ function onAuthenticated(user) {
   const badge = document.getElementById('userBadge');
   badge.textContent = `${user.email} (${user.rol})`;
   badge.classList.remove('d-none');
-  document.getElementById('btnLogout').classList.remove('d-none');
+  document.getElementById('btnLogout').classList.toggle('d-none', publicMode);
   document.getElementById('tabAdminLi').classList.toggle('d-none', !isAdmin());
   loginModal().hide();
   loadSessions().then(refreshSessionState);
   if (!pollTimer) pollTimer = setInterval(refreshSessionState, 3000);
 }
 
+// GET /user/me sin pasar por api(): un 401 aqui no debe abrir el modal todavia.
+async function quienSoy(conToken) {
+  const headers = conToken && token ? { Authorization: 'Bearer ' + token } : {};
+  const r = await fetch(API + '/user/me', { headers });
+  return r.ok ? r.json() : null;
+}
+
 async function bootstrapAuth() {
-  if (!token) { showLogin(); return; }
   try {
-    const me = await api('GET', '/user/me');
-    onAuthenticated(me);
-  } catch {
-    if (token) showLogin();
+    // 1) token guardado en este navegador
+    if (token) {
+      const me = await quienSoy(true);
+      if (me) { onAuthenticated(me); return; }
+      setToken(null);
+    }
+    // 2) sin token: si el servidor corre con AUTH_DISABLED, /user/me responde igual
+    const anon = await quienSoy(false);
+    if (anon) {
+      publicMode = true;
+      onAuthenticated(anon);
+      return;
+    }
+  } catch (e) {
+    // sin red: cae al login
   }
+  showLogin();
 }
 
 document.getElementById('formLogin').addEventListener('submit', async (ev) => {
@@ -236,7 +257,7 @@ document.getElementById('btnNuevaSesion').addEventListener('click', async () => 
 
 // ---------- estado de sesion ----------
 async function refreshSessionState() {
-  if (!token || refreshing) return;
+  if ((!token && !publicMode) || refreshing) return;
   refreshing = true;
   try {
     const states = await api('GET', '/whatsapp/status-sessions');

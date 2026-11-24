@@ -23,9 +23,20 @@ import { AuthUser } from '../interfaces/auth-user.interface';
  * - El resto exige Bearer JWT valido Y que el usuario exista y siga activo
  *   (asi desactivar o borrar un usuario invalida sus tokens anteriores).
  * - Si la ruta lleva @Roles(...), el rol del usuario debe estar en la lista.
+ *
+ * Modo AUTH_DISABLED=true (decisión del operador, ver docs/SEGURIDAD.md): una
+ * petición SIN token actúa como el primer SUPER_ADMIN activo. Con token se
+ * valida igual que siempre, así las integraciones que ya lo mandan no cambian.
  */
+export const authDisabled = (): boolean =>
+  process.env.AUTH_DISABLED === 'true';
+
+const ADMIN_CACHE_MS = 30_000;
+
 @Injectable()
 export class AuthGuard implements CanActivate {
+  private adminCache?: { user: AuthUser; until: number };
+
   constructor(
     private readonly jwtService: JwtService,
     private readonly reflector: Reflector,
@@ -44,7 +55,11 @@ export class AuthGuard implements CanActivate {
     const token = this.extractTokenFromHeader(request);
 
     if (!token) {
-      throw new UnauthorizedException('Token no enviado');
+      if (!authDisabled()) {
+        throw new UnauthorizedException('Token no enviado');
+      }
+      (request as any).user = await this.actorSinToken();
+      return true;
     }
 
     let payload: JwtPayload;
@@ -92,6 +107,39 @@ export class AuthGuard implements CanActivate {
     }
 
     return true;
+  }
+
+  /** AUTH_DISABLED: quién "es" una petición anónima. Se cachea 30 s para no ir a la BD en cada petición. */
+  private async actorSinToken(): Promise<AuthUser> {
+    const now = Date.now();
+    if (this.adminCache && this.adminCache.until > now) {
+      return this.adminCache.user;
+    }
+    const admin = await this.userRepository.findOne({
+      where: { rol: Rol.SUPER_ADMIN, isActive: true },
+      order: { created_at: 'ASC' },
+      select: {
+        id: true,
+        email: true,
+        usuario: true,
+        rol: true,
+        isActive: true,
+      },
+    });
+    if (!admin) {
+      throw new UnauthorizedException(
+        'AUTH_DISABLED activo pero no hay ningún SUPER_ADMIN activo',
+      );
+    }
+    const user: AuthUser = {
+      id: admin.id,
+      email: admin.email,
+      usuario: admin.usuario,
+      rol: admin.rol,
+      isActive: admin.isActive,
+    };
+    this.adminCache = { user, until: now + ADMIN_CACHE_MS };
+    return user;
   }
 
   private extractTokenFromHeader(request: Request): string | undefined {

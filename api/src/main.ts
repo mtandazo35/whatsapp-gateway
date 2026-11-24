@@ -14,6 +14,13 @@ async function bootstrap() {
       'JWT_SECRET no definido o demasiado corto (minimo 32 caracteres)',
     );
   }
+  if (process.env.AUTH_DISABLED === 'true') {
+    new Logger('Seguridad').warn(
+      'AUTH_DISABLED=true: la API y el panel aceptan peticiones SIN token como SUPER_ADMIN. ' +
+        'Cualquiera que alcance la URL puede vincular WhatsApp y enviar mensajes. ' +
+        'Limita el acceso por red o pon AUTH_DISABLED=false.',
+    );
+  }
 
   const app = await NestFactory.create(AppModule);
   app.setGlobalPrefix('api');

@@ -95,6 +95,11 @@ curl -s https://<dominio>/api/messages/0b1f... -H "Authorization: Bearer $TOKEN"
 Un usuario `USUARIO` solo ve y usa sus propias sesiones; crea uno por integración con
 `POST /api/user` y evita repartir el token del administrador.
 
+Si el servidor solo se alcanza desde una red de confianza y no quieres pantalla de login,
+`AUTH_DISABLED=true` en `.env` quita el login del panel y de la API (toda petición sin token
+actúa como administrador). Lee antes la sección correspondiente de
+[docs/SEGURIDAD.md](docs/SEGURIDAD.md#modo-sin-login-auth_disabledtrue).
+
 ## Mapa de la API
 
 Todas con `Authorization: Bearer` salvo las marcadas 🔓. Detalle, cuerpos y errores en

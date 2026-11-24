@@ -148,6 +148,8 @@ DB_SYNC=false
 
 JWT_SECRET=${JWT_SECRET}
 JWT_EXPIRES_IN=8h
+# true = panel y API sin login (ver docs/SEGURIDAD.md). Cambiar y reiniciar el api.
+AUTH_DISABLED=${AUTH_DISABLED:-false}
 
 # Administrador inicial (solo se usa si la tabla de usuarios esta vacia)
 ADMIN_EMAIL=${ADMIN_EMAIL}

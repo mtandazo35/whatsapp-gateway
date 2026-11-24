@@ -24,6 +24,24 @@ API y sirve el frontend estático para el resto.
 - El frontend guarda el token en `localStorage` y lo manda como `Bearer`. No hay cookies, así
   que no hay CSRF; a cambio un XSS robaría el token, por eso la CSP y el escape (abajo).
 
+### Modo sin login (`AUTH_DISABLED=true`)
+
+Opción del operador para instalaciones donde la URL solo se alcanza desde una red de
+confianza y no se quiere pantalla de login. Con ella:
+
+- Una petición **sin** cabecera `Authorization` actúa como el primer `SUPER_ADMIN` activo
+  (consulta cacheada 30 s). El panel detecta el modo al cargar (`GET /user/me` sin token
+  responde 200) y no muestra el modal ni el botón de salir.
+- Una petición **con** token se valida exactamente igual que antes: las integraciones que ya
+  mandan `Bearer` no cambian y un token inválido sigue dando 401.
+- Rate limit, anti-SSRF, límites de subida y auditoría siguen activos.
+- La API avisa en el log al arrancar.
+
+**Lo que significa:** cualquiera que alcance la URL puede vincular un WhatsApp, enviar
+mensajes desde él, leer el historial y crear usuarios. Los bots escanean cualquier IP
+pública a los minutos de arrancar. Úsalo solo con el acceso restringido por red (firewall
+delante de Caddy, VPN, allowlist de IP) y vuelve a `false` si la URL queda expuesta.
+
 ## Autorización
 
 Tres roles, decididos siempre en el servidor:
