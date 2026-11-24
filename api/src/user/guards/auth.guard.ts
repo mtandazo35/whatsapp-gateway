@@ -28,8 +28,7 @@ import { AuthUser } from '../interfaces/auth-user.interface';
  * petición SIN token actúa como el primer SUPER_ADMIN activo. Con token se
  * valida igual que siempre, así las integraciones que ya lo mandan no cambian.
  */
-export const authDisabled = (): boolean =>
-  process.env.AUTH_DISABLED === 'true';
+export const authDisabled = (): boolean => process.env.AUTH_DISABLED === 'true';
 
 const ADMIN_CACHE_MS = 30_000;
 
