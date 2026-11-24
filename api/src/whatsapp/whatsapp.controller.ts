@@ -82,6 +82,24 @@ export class WhatsappController {
   }
 
   /**
+   * Comprueba con WhatsApp que el destinatario existe antes de encolar. Sin esto,
+   * un número incompleto se "envía" (Baileys devuelve id) y nunca llega a nadie.
+   * Si la comprobación falla (red, socket), se deja pasar y lo intenta la cola.
+   */
+  private async numeroConWhatsapp(
+    sessionId: string,
+    number: string,
+  ): Promise<string> {
+    const r = await this.whatsappService.checkIfNumberExists(sessionId, number);
+    if (!r.exists && !('error' in r && r.error)) {
+      throw new BadRequestException(
+        `El número ${number} no tiene WhatsApp. Escríbelo con código de país y sin el 0 inicial (ej. 593987654321)`,
+      );
+    }
+    return number;
+  }
+
+  /**
    * Ejecuta `accion` bajo una Idempotency-Key opcional:
    *  - misma clave y mismo cuerpo -> respuesta cacheada (o 'duplicate' si sigue en curso)
    *  - misma clave y otro cuerpo  -> 409
@@ -184,7 +202,10 @@ export class WhatsappController {
     const { sessionId, message } = data;
 
     const session = await this.sessionLista(sessionId, actor);
-    const number = this.numeroLimpio(data.number);
+    const number = await this.numeroConWhatsapp(
+      sessionId,
+      this.numeroLimpio(data.number),
+    );
 
     return this.conIdempotencia(
       sessionId,
@@ -219,7 +240,10 @@ export class WhatsappController {
     const { sessionId, mediaUrl, caption } = body;
 
     const session = await this.sessionLista(sessionId, actor);
-    const number = this.numeroLimpio(body.number);
+    const number = await this.numeroConWhatsapp(
+      sessionId,
+      this.numeroLimpio(body.number),
+    );
 
     return this.conIdempotencia(
       sessionId,
@@ -279,7 +303,10 @@ export class WhatsappController {
       const { sessionId, caption } = body;
 
       const session = await this.sessionLista(sessionId, actor);
-      const number = this.numeroLimpio(body.number);
+      const number = await this.numeroConWhatsapp(
+        sessionId,
+        this.numeroLimpio(body.number),
+      );
 
       const queued = await this.whatsappService.sendMediaFiles(
         session,
@@ -310,6 +337,7 @@ export class WhatsappController {
   ) {
     const original = await this.messagesService.findOne(id, actor);
     const session = await this.sessionLista(original.session.sessionId, actor);
+    await this.numeroConWhatsapp(session.sessionId, original.receptor);
     const { messageId, jobId } = await this.whatsappService.retry(
       original,
       session,

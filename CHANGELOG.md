@@ -5,6 +5,10 @@ La versión está en `api/package.json`.
 
 ## Sin publicar
 
+- Los envíos (texto, URL, archivo y reintento) comprueban con WhatsApp que el destinatario
+  existe antes de encolar: si no, 400 «El número … no tiene WhatsApp» y nada se encola. Antes
+  un número incompleto quedaba como `sent` sin llegar a nadie. El panel antepone 593 a los
+  números escritos en formato local de Ecuador (09…) y muestra el formato esperado.
 - `AUTH_DISABLED=true`: modo sin login para el panel y la API. Una petición sin token actúa
   como el primer `SUPER_ADMIN` activo; con token se valida igual que antes. El frontend lo
   detecta al cargar y no muestra el modal. La API avisa en el log al arrancar. Pensado solo

@@ -243,6 +243,9 @@ Respuesta **202**:
 ```
 
 Requisitos: sesión tuya, activa y **conectada** (`open`); si no, 400 y nada se encola.
+El destinatario se comprueba con WhatsApp antes de encolar (igual que `check-number`): si el
+número no existe, 400 «no tiene WhatsApp» y nada se encola. Un número incompleto o sin código
+de país no llega a nadie aunque WhatsApp lo acepte; por eso se corta aquí.
 
 Con la misma `Idempotency-Key` (máx. 128 caracteres) dentro de 24 h se devuelve la
 respuesta original sin reencolar. Si la primera petición aún está en curso:

@@ -363,8 +363,14 @@ async function desvincular() {
 }
 
 // ---------- envios ----------
+// Solo digitos. Si viene en formato local de Ecuador (09xxxxxxxx o 9xxxxxxxx) se
+// antepone 593; cualquier otro pais debe escribirse ya con su codigo.
 function normalizeNumber(raw) {
-  return String(raw || '').replace(/\D/g, '');
+  let n = String(raw || '').replace(/\D/g, '');
+  if (n.startsWith('00')) n = n.slice(2);
+  if (n.length === 10 && n.startsWith('0')) n = '593' + n.slice(1);
+  else if (n.length === 9 && n.startsWith('9')) n = '593' + n;
+  return n;
 }
 
 function describeQueued(r) {
