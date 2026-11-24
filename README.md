@@ -65,7 +65,8 @@ Abre `https://<dominio>/`, entra con el administrador y:
 
 1. **Sesion** → *Vincular WhatsApp* → escanea el QR con el teléfono. El modal se cierra solo
    al conectar y la sesión queda guardada: se reconecta sola tras reinicios.
-2. **Mensaje** / **Archivo** → envía un texto, un archivo subido o una URL pública.
+2. **Mensaje** / **Archivo** → elige el país, escribe el número nacional (sin el 0 inicial;
+   el panel valida los dígitos y completa el código) y envía un texto, un archivo o una URL.
 3. **Historial** → estado de cada envío: en cola, enviado, entregado, leído o fallido.
 
 ### Desde tu sistema

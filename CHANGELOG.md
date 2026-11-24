@@ -5,6 +5,11 @@ La versión está en `api/package.json`.
 
 ## Sin publicar
 
+- Panel: selector de país junto a cada campo de número (envíos, archivo, URL y verificar).
+  Completa el código de país y valida la cantidad de dígitos del número nacional antes de
+  enviar (Ecuador 9, Colombia 10, Perú 9, etc.; 27 países y «Otro» para número completo).
+  Muestra en vivo cómo se enviará el número y marca el campo en rojo si faltan o sobran
+  dígitos. El país elegido se recuerda en el navegador.
 - Los envíos (texto, URL, archivo y reintento) comprueban con WhatsApp que el destinatario
   existe antes de encolar: si no, 400 «El número … no tiene WhatsApp» y nada se encola. Antes
   un número incompleto quedaba como `sent` sin llegar a nadie. El panel antepone 593 a los

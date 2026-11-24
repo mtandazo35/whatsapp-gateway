@@ -74,9 +74,13 @@
           <form id="formText" class="mt-3">
             <div class="row g-2">
               <div class="col-md-4">
-                <label class="form-label">Numero (con codigo de pais)</label>
-                <input type="text" class="form-control" id="textNumber" placeholder="593987654321" required>
-                <div class="form-text">Con código de país y sin el 0 inicial (593987654321). Si escribes 09…, se añade 593 solo.</div>
+                <label class="form-label">Número</label>
+                <div class="input-group">
+                  <select class="form-select pais-select" data-for="textNumber" title="País" style="max-width: 12rem"></select>
+                  <input type="text" class="form-control numero-input" id="textNumber" inputmode="numeric" autocomplete="off" required>
+                </div>
+                <div class="form-text numero-ayuda" data-for="textNumber"></div>
+                <div class="form-text text-danger numero-error" data-for="textNumber"></div>
               </div>
               <div class="col-md-8">
                 <label class="form-label">Mensaje</label>
@@ -108,8 +112,12 @@
                 <div class="row g-2">
                   <div class="col-md-4">
                     <label class="form-label">Numero</label>
-                    <input type="text" class="form-control" id="mediaFileNumber" placeholder="593987654321" required>
-                <div class="form-text">Con código de país y sin el 0 inicial (593987654321). Si escribes 09…, se añade 593 solo.</div>
+                    <div class="input-group">
+                      <select class="form-select pais-select" data-for="mediaFileNumber" title="País" style="max-width: 12rem"></select>
+                      <input type="text" class="form-control numero-input" id="mediaFileNumber" inputmode="numeric" autocomplete="off" required>
+                    </div>
+                    <div class="form-text numero-ayuda" data-for="mediaFileNumber"></div>
+                    <div class="form-text text-danger numero-error" data-for="mediaFileNumber"></div>
                   </div>
                   <div class="col-md-8">
                     <label class="form-label">Archivos (max 10, 25 MB cada uno)</label>
@@ -128,8 +136,12 @@
                 <div class="row g-2">
                   <div class="col-md-4">
                     <label class="form-label">Numero</label>
-                    <input type="text" class="form-control" id="mediaUrlNumber" placeholder="593987654321" required>
-                <div class="form-text">Con código de país y sin el 0 inicial (593987654321). Si escribes 09…, se añade 593 solo.</div>
+                    <div class="input-group">
+                      <select class="form-select pais-select" data-for="mediaUrlNumber" title="País" style="max-width: 12rem"></select>
+                      <input type="text" class="form-control numero-input" id="mediaUrlNumber" inputmode="numeric" autocomplete="off" required>
+                    </div>
+                    <div class="form-text numero-ayuda" data-for="mediaUrlNumber"></div>
+                    <div class="form-text text-danger numero-error" data-for="mediaUrlNumber"></div>
                   </div>
                   <div class="col-md-8">
                     <label class="form-label">URL publica del archivo (http/https, sin redirecciones)</label>
@@ -155,9 +167,12 @@
           <h5 class="card-title"><i class="bi bi-search"></i> Verificar numero en WhatsApp</h5>
           <form id="formCheck" class="mt-3">
             <div class="input-group">
-              <input type="text" class="form-control" id="checkNumber" placeholder="593987654321" required>
+              <select class="form-select pais-select" data-for="checkNumber" title="País" style="max-width: 12rem"></select>
+              <input type="text" class="form-control numero-input" id="checkNumber" inputmode="numeric" autocomplete="off" required>
               <button class="btn btn-primary" type="submit">Verificar</button>
             </div>
+            <div class="form-text numero-ayuda" data-for="checkNumber"></div>
+            <div class="form-text text-danger numero-error" data-for="checkNumber"></div>
           </form>
           <div id="checkResult" class="mt-3"></div>
         </div>

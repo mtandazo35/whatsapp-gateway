@@ -363,15 +363,117 @@ async function desvincular() {
 }
 
 // ---------- envios ----------
-// Solo digitos. Si viene en formato local de Ecuador (09xxxxxxxx o 9xxxxxxxx) se
-// antepone 593; cualquier otro pais debe escribirse ya con su codigo.
-function normalizeNumber(raw) {
+// ---------- paises y validacion del numero ----------
+// longitudes = digitos del numero nacional (sin codigo de pais ni 0 inicial).
+// Argentina va con el 9 de moviles incluido en el codigo (54 9 + 10 digitos).
+const PAISES = [
+  { id: 'EC', nombre: 'Ecuador', codigo: '593', longitudes: [9], ejemplo: '987654321' },
+  { id: 'CO', nombre: 'Colombia', codigo: '57', longitudes: [10], ejemplo: '3001234567' },
+  { id: 'PE', nombre: 'Perú', codigo: '51', longitudes: [9], ejemplo: '912345678' },
+  { id: 'VE', nombre: 'Venezuela', codigo: '58', longitudes: [10], ejemplo: '4121234567' },
+  { id: 'BO', nombre: 'Bolivia', codigo: '591', longitudes: [8], ejemplo: '71234567' },
+  { id: 'CL', nombre: 'Chile', codigo: '56', longitudes: [9], ejemplo: '912345678' },
+  { id: 'AR', nombre: 'Argentina', codigo: '549', etiqueta: '+54 9', longitudes: [10], ejemplo: '1123456789' },
+  { id: 'UY', nombre: 'Uruguay', codigo: '598', longitudes: [8], ejemplo: '91234567' },
+  { id: 'PY', nombre: 'Paraguay', codigo: '595', longitudes: [9], ejemplo: '981123456' },
+  { id: 'BR', nombre: 'Brasil', codigo: '55', longitudes: [10, 11], ejemplo: '11912345678' },
+  { id: 'MX', nombre: 'México', codigo: '52', longitudes: [10], ejemplo: '5512345678' },
+  { id: 'PA', nombre: 'Panamá', codigo: '507', longitudes: [8], ejemplo: '61234567' },
+  { id: 'CR', nombre: 'Costa Rica', codigo: '506', longitudes: [8], ejemplo: '81234567' },
+  { id: 'GT', nombre: 'Guatemala', codigo: '502', longitudes: [8], ejemplo: '51234567' },
+  { id: 'HN', nombre: 'Honduras', codigo: '504', longitudes: [8], ejemplo: '91234567' },
+  { id: 'SV', nombre: 'El Salvador', codigo: '503', longitudes: [8], ejemplo: '71234567' },
+  { id: 'NI', nombre: 'Nicaragua', codigo: '505', longitudes: [8], ejemplo: '81234567' },
+  { id: 'DO', nombre: 'Rep. Dominicana', codigo: '1', longitudes: [10], ejemplo: '8091234567' },
+  { id: 'CU', nombre: 'Cuba', codigo: '53', longitudes: [8], ejemplo: '51234567' },
+  { id: 'US', nombre: 'Estados Unidos / Canadá', codigo: '1', longitudes: [10], ejemplo: '4155550123' },
+  { id: 'ES', nombre: 'España', codigo: '34', longitudes: [9], ejemplo: '612345678' },
+  { id: 'PT', nombre: 'Portugal', codigo: '351', longitudes: [9], ejemplo: '912345678' },
+  { id: 'IT', nombre: 'Italia', codigo: '39', longitudes: [9, 10], ejemplo: '3123456789' },
+  { id: 'FR', nombre: 'Francia', codigo: '33', longitudes: [9], ejemplo: '612345678' },
+  { id: 'DE', nombre: 'Alemania', codigo: '49', longitudes: [10, 11], ejemplo: '15123456789' },
+  { id: 'GB', nombre: 'Reino Unido', codigo: '44', longitudes: [10], ejemplo: '7400123456' },
+  { id: 'XX', nombre: 'Otro (número completo con código)', codigo: '', longitudes: [], ejemplo: '14155550123' },
+];
+let paisActual = localStorage.getItem('wa.pais') || 'EC';
+function pais() { return PAISES.find(p => p.id === paisActual) || PAISES[0]; }
+function longitudesTexto(p) { return p.longitudes.length === 1 ? String(p.longitudes[0]) : p.longitudes.join(' u '); }
+
+// Devuelve { ok, numero (con codigo, listo para la API), nacional, error }.
+function analizarNumero(raw, p = pais()) {
   let n = String(raw || '').replace(/\D/g, '');
   if (n.startsWith('00')) n = n.slice(2);
-  if (n.length === 10 && n.startsWith('0')) n = '593' + n.slice(1);
-  else if (n.length === 9 && n.startsWith('9')) n = '593' + n;
-  return n;
+  if (!p.codigo) {
+    if (n.length < 10 || n.length > 15) {
+      return { ok: false, nacional: n, error: `Escribe el número completo con código de país (10 a 15 dígitos; llevas ${n.length}).` };
+    }
+    return { ok: true, numero: n, nacional: n };
+  }
+  // Ya viene con el codigo del pais delante
+  if (n.startsWith(p.codigo) && p.longitudes.includes(n.length - p.codigo.length)) {
+    return { ok: true, numero: n, nacional: n.slice(p.codigo.length) };
+  }
+  const nacional = n.replace(/^0+/, '');
+  if (!p.longitudes.includes(nacional.length)) {
+    return {
+      ok: false,
+      nacional,
+      error: `${p.nombre}: son ${longitudesTexto(p)} dígitos después del ${p.etiqueta || '+' + p.codigo}; llevas ${nacional.length}.`,
+    };
+  }
+  return { ok: true, numero: p.codigo + nacional, nacional };
 }
+
+function validarCampo(inp) {
+  const p = pais();
+  const ayuda = document.querySelector(`.numero-ayuda[data-for="${inp.id}"]`);
+  const err = document.querySelector(`.numero-error[data-for="${inp.id}"]`);
+  inp.placeholder = p.ejemplo;
+  const r = analizarNumero(inp.value, p);
+  const vacio = !inp.value.trim();
+  if (ayuda) {
+    ayuda.textContent = p.codigo
+      ? `Se envía como ${p.etiqueta || '+' + p.codigo} ${vacio ? p.ejemplo : r.nacional} · ${longitudesTexto(p)} dígitos, sin el 0 inicial`
+      : 'Número completo con código de país, sin + ni espacios.';
+  }
+  inp.classList.toggle('is-invalid', !vacio && !r.ok);
+  inp.classList.toggle('is-valid', !vacio && r.ok);
+  if (err) err.textContent = !vacio && !r.ok ? r.error : '';
+  return r;
+}
+
+// Para los formularios: numero listo para la API o null (y el error ya mostrado).
+function numeroValidado(inputId) {
+  const inp = document.getElementById(inputId);
+  const r = validarCampo(inp);
+  if (!r.ok) {
+    toast(r.error || 'Número inválido', 'warning');
+    inp.focus();
+    return null;
+  }
+  return r.numero;
+}
+
+function initPaises() {
+  const selects = document.querySelectorAll('select.pais-select');
+  const opciones = PAISES.map(p => `<option value="${p.id}">${p.codigo ? (p.etiqueta || '+' + p.codigo) + ' · ' : ''}${p.nombre}</option>`).join('');
+  selects.forEach(sel => {
+    sel.innerHTML = opciones;
+    sel.value = paisActual;
+    sel.addEventListener('change', () => {
+      paisActual = sel.value;
+      localStorage.setItem('wa.pais', paisActual);
+      selects.forEach(s => { if (s !== sel) s.value = paisActual; });
+      document.querySelectorAll('input.numero-input').forEach(validarCampo);
+    });
+  });
+  document.querySelectorAll('input.numero-input').forEach(inp => {
+    inp.addEventListener('input', () => validarCampo(inp));
+    validarCampo(inp);
+  });
+}
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initPaises);
+else initPaises();
 
 function describeQueued(r) {
   if (r && r.status === 'duplicate') return 'Peticion repetida: ya estaba en proceso.';
@@ -383,7 +485,8 @@ function describeQueued(r) {
 document.getElementById('formText').addEventListener('submit', async (ev) => {
   ev.preventDefault();
   if (!activeSessionId) { toast('Vincula WhatsApp primero', 'warning'); return; }
-  const number = normalizeNumber(document.getElementById('textNumber').value);
+  const number = numeroValidado('textNumber');
+  if (!number) return;
   const message = document.getElementById('textMessage').value;
   const fastMode = document.getElementById('textFastMode').checked;
   try {
@@ -398,7 +501,8 @@ document.getElementById('formText').addEventListener('submit', async (ev) => {
 document.getElementById('formMediaFile').addEventListener('submit', async (ev) => {
   ev.preventDefault();
   if (!activeSessionId) { toast('Vincula WhatsApp primero', 'warning'); return; }
-  const number = normalizeNumber(document.getElementById('mediaFileNumber').value);
+  const number = numeroValidado('mediaFileNumber');
+  if (!number) return;
   const caption = document.getElementById('mediaFileCaption').value;
   const files = document.getElementById('mediaFileFiles').files;
   if (!files.length) { toast('Selecciona un archivo', 'warning'); return; }
@@ -420,7 +524,8 @@ document.getElementById('formMediaFile').addEventListener('submit', async (ev) =
 document.getElementById('formMediaUrl').addEventListener('submit', async (ev) => {
   ev.preventDefault();
   if (!activeSessionId) { toast('Vincula WhatsApp primero', 'warning'); return; }
-  const number = normalizeNumber(document.getElementById('mediaUrlNumber').value);
+  const number = numeroValidado('mediaUrlNumber');
+  if (!number) return;
   const mediaUrl = document.getElementById('mediaUrlUrl').value;
   const caption = document.getElementById('mediaUrlCaption').value;
   try {
@@ -435,7 +540,8 @@ document.getElementById('formMediaUrl').addEventListener('submit', async (ev) =>
 document.getElementById('formCheck').addEventListener('submit', async (ev) => {
   ev.preventDefault();
   if (!activeSessionId) { toast('Vincula WhatsApp primero', 'warning'); return; }
-  const number = normalizeNumber(document.getElementById('checkNumber').value);
+  const number = numeroValidado('checkNumber');
+  if (!number) return;
   const box = document.getElementById('checkResult');
   try {
     const r = await api('GET', `/whatsapp/check-number?sessionId=${encodeURIComponent(activeSessionId)}&number=${encodeURIComponent(number)}`);
